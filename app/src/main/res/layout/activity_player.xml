@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/playerRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -38,15 +40,29 @@
             android:contentDescription="Opciones" />
     </LinearLayout>
 
-    <ImageView
-        android:id="@+id/playerCover"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="18dp"
         android:layout_marginBottom="22dp"
-        android:scaleType="centerCrop"
-        android:background="@drawable/bg_card" />
+        android:background="@drawable/bg_card">
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/playerVideo"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"
+            app:use_controller="false"
+            app:resize_mode="fit"
+            app:show_buffering="when_playing" />
+
+        <ImageView
+            android:id="@+id/playerCover"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/playerTitle"
