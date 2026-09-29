@@ -4,11 +4,13 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.Gravity
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ArrayAdapter
@@ -39,6 +41,7 @@ import com.german.dronnk.download.DownloadRepository
 import com.german.dronnk.model.Song
 import com.german.dronnk.network.ApiClient
 import com.german.dronnk.player.PlayerManager
+import com.german.dronnk.update.AppUpdateManager
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import kotlinx.coroutines.launch
 
@@ -60,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyTitle: TextView
     private lateinit var emptyText: TextView
     private lateinit var emptyAction: TextView
+    private lateinit var playlistListContainer: LinearLayout
     private val suggestionHandler = Handler(Looper.getMainLooper())
     private var suggestionRunnable: Runnable? = null
     private var suggestionSongs: List<Song> = emptyList()
@@ -97,6 +101,7 @@ class MainActivity : AppCompatActivity() {
         emptyTitle = findViewById(R.id.emptyTitle)
         emptyText = findViewById(R.id.emptyText)
         emptyAction = findViewById(R.id.emptyAction)
+        playlistListContainer = findViewById(R.id.playlistListContainer)
     }
 
     private fun setupList() {
@@ -218,6 +223,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSearchHome() {
+        playlistListContainer.visibility = View.GONE
         screenTitle.text = "Dronnk"
         searchBox.visibility = View.VISIBLE
         genreScroll.visibility = View.VISIBLE
@@ -365,6 +371,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDownloads() {
+        playlistListContainer.visibility = View.GONE
         screenTitle.text = "Descargas"
         searchBox.visibility = View.GONE
         genreScroll.visibility = View.GONE
@@ -380,6 +387,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFavorites() {
+        playlistListContainer.visibility = View.GONE
         screenTitle.text = "Favoritos"
         searchBox.visibility = View.GONE
         genreScroll.visibility = View.GONE
@@ -399,13 +407,62 @@ class MainActivity : AppCompatActivity() {
         searchBox.visibility = View.GONE
         genreScroll.visibility = View.GONE
         sectionTitle.text = "Organiza tu música"
+
         val playlists = LibraryRepository.playlists(this)
-        val description = if (playlists.isEmpty()) {
-            "Crea tu primera playlist y añade canciones desde el menú de cada resultado."
-        } else {
-            playlists.joinToString("\n") { "${it.name} · ${it.songs.size} canciones" }
+        songList.visibility = View.GONE
+        emptyPanel.visibility = View.VISIBLE
+        emptyTitle.text = "Tus playlists"
+        emptyText.visibility = if (playlists.isEmpty()) View.VISIBLE else View.GONE
+        emptyText.text = "Crea tu primera playlist y añade canciones desde el menú de cada resultado."
+        emptyAction.visibility = View.VISIBLE
+        emptyAction.text = "Nueva playlist"
+        emptyAction.setOnClickListener { createPlaylistDialog() }
+
+        playlistListContainer.removeAllViews()
+        playlistListContainer.visibility = if (playlists.isEmpty()) View.GONE else View.VISIBLE
+
+        playlists.forEach { playlist ->
+            val row = TextView(this).apply {
+                text = "${playlist.name}  ·  ${playlist.songs.size} canciones"
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(22, 18, 22, 18)
+                isClickable = true
+                isFocusable = true
+                setBackgroundResource(R.drawable.bg_card)
+                setOnClickListener { showPlaylist(playlist.id) }
+            }
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = (8 * resources.displayMetrics.density).toInt()
+            }
+            playlistListContainer.addView(row, params)
         }
-        showEmpty("Tus playlists", description, "Nueva playlist") { createPlaylistDialog() }
+    }
+
+    private fun showPlaylist(playlistId: String) {
+        val playlist = LibraryRepository.playlist(this, playlistId) ?: return
+        screenTitle.text = playlist.name
+        searchBox.visibility = View.GONE
+        genreScroll.visibility = View.GONE
+        sectionTitle.text = "${playlist.songs.size} canciones"
+        playlistListContainer.visibility = View.GONE
+
+        if (playlist.songs.isEmpty()) {
+            showEmpty(
+                playlist.name,
+                "Esta playlist todavía no tiene canciones.",
+                null
+            )
+        } else {
+            emptyPanel.visibility = View.GONE
+            songList.visibility = View.VISIBLE
+            adapter.submit(playlist.songs)
+        }
     }
 
     private fun showSettings() {
@@ -413,14 +470,49 @@ class MainActivity : AppCompatActivity() {
         searchBox.visibility = View.GONE
         genreScroll.visibility = View.GONE
         sectionTitle.text = "Configuración"
+        playlistListContainer.visibility = View.GONE
+
         showEmpty(
-            "Dronnk 1.0",
+            "Dronnk ${BuildConfig.VERSION_NAME}",
             "Audio: MP3 · 192 kbps\nCarpeta de audio: Music/Dronnk\nCarpeta de video: Movies/Dronnk\nReproducción: archivo local",
-            null
-        )
+            "Buscar actualización"
+        ) {
+            checkForUpdates()
+        }
+    }
+
+    private fun checkForUpdates() {
+        loading.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            AppUpdateManager.checkLatest(this@MainActivity)
+                .onSuccess { release ->
+                    loading.visibility = View.GONE
+                    if (release == null) {
+                        Toast.makeText(this@MainActivity, "Dronnk ya está actualizado", Toast.LENGTH_SHORT).show()
+                    } else {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Nueva versión disponible")
+                            .setMessage("Dronnk ${release.versionName} está disponible. ¿Descargar actualización?")
+                            .setPositiveButton("Actualizar") { _, _ ->
+                                AppUpdateManager.startDownload(this@MainActivity, release)
+                            }
+                            .setNegativeButton("Ahora no", null)
+                            .show()
+                    }
+                }
+                .onFailure {
+                    loading.visibility = View.GONE
+                    Toast.makeText(
+                        this@MainActivity,
+                        "No se pudo comprobar la actualización",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
     }
 
     private fun showEmpty(title: String, text: String, action: String?, onAction: (() -> Unit)? = null) {
+        playlistListContainer.visibility = View.GONE
         songList.visibility = View.GONE
         emptyPanel.visibility = View.VISIBLE
         emptyTitle.text = title
