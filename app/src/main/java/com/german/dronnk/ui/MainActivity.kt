@@ -6,15 +6,23 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import android.text.Editable
+import android.text.TextWatcher
+import android.content.ClipData
+import android.net.Uri
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -41,7 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var miniCover: ImageView
     private lateinit var miniPlay: ImageButton
     private lateinit var songList: RecyclerView
-    private lateinit var searchInput: EditText
+    private lateinit var searchInput: AutoCompleteTextView
     private lateinit var searchBox: View
     private lateinit var genreScroll: View
     private lateinit var screenTitle: TextView
@@ -50,6 +58,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyTitle: TextView
     private lateinit var emptyText: TextView
     private lateinit var emptyAction: TextView
+    private val suggestionHandler = Handler(Looper.getMainLooper())
+    private var suggestionRunnable: Runnable? = null
+    private var suggestionSongs: List<Song> = emptyList()
+    private var selectingSuggestion = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,14 +111,70 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupSearch() {
+        val suggestionAdapter = ArrayAdapter<String>(
+            this,
+            android.R.layout.simple_dropdown_item_1line,
+            mutableListOf()
+        )
+        searchInput.setAdapter(suggestionAdapter)
+
         searchInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH || searchInput.text.isNotBlank()) {
                 performSearch(searchInput.text.toString())
                 true
             } else false
         }
+
+        searchInput.setOnItemClickListener { _, _, position, _ ->
+            suggestionSongs.getOrNull(position)?.let { song ->
+                selectingSuggestion = true
+                searchInput.setText(song.titulo ?: "")
+                searchInput.setSelection(searchInput.text.length)
+                selectingSuggestion = false
+                performSearch(song.titulo ?: "")
+            }
+        }
+
+        searchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (selectingSuggestion) return
+                suggestionRunnable?.let(suggestionHandler::removeCallbacks)
+                val query = s?.toString()?.trim().orEmpty()
+                if (query.length < 2) {
+                    suggestionSongs = emptyList()
+                    suggestionAdapter.clear()
+                    return
+                }
+
+                suggestionRunnable = Runnable {
+                    lifecycleScope.launch {
+                        runCatching { ApiClient.api.buscar(query) }
+                            .onSuccess { response ->
+                                if (searchInput.text.toString().trim() != query) return@onSuccess
+                                suggestionSongs = response.canciones.take(7)
+                                suggestionAdapter.clear()
+                                suggestionAdapter.addAll(
+                                    suggestionSongs.map {
+                                        val artist = it.canal?.takeIf { a -> a.isNotBlank() }
+                                        if (artist != null) "${it.titulo ?: "Canción"} — $artist"
+                                        else it.titulo ?: "Canción"
+                                    }
+                                )
+                                suggestionAdapter.notifyDataSetChanged()
+                                if (suggestionSongs.isNotEmpty() && searchInput.hasFocus()) {
+                                    searchInput.showDropDown()
+                                }
+                            }
+                    }
+                }.also { suggestionHandler.postDelayed(it, 350L) }
+            }
+        })
+
         findViewById<ImageButton>(R.id.clearSearch).setOnClickListener {
             searchInput.setText("")
+            suggestionAdapter.clear()
             showSearchHome()
         }
     }
@@ -384,11 +452,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shareSong(song: Song) {
+        val local = song.localPath ?: song.url
+        if (!local.isNullOrBlank() && (local.startsWith("content://") || local.startsWith("file://"))) {
+            val uri = Uri.parse(local)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "audio/mpeg"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: "Dronnk"}")
+                clipData = ClipData.newRawUri("Dronnk audio", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Compartir canción"))
+            return
+        }
+
+        val source = song.sourceUrl ?: song.url
+        val text = buildString {
+            append(song.titulo ?: "Canción")
+            song.canal?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
+            source?.takeIf { it.startsWith("http") }?.let { append("\n").append(it) }
+        }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: ""}")
+            putExtra(Intent.EXTRA_TEXT, text)
         }
-        startActivity(Intent.createChooser(send, "Compartir"))
+        startActivity(Intent.createChooser(send, "Compartir canción"))
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -402,5 +490,10 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         PlayerManager.currentSong?.let { showMiniPlayer(it) }
+    }
+
+    override fun onDestroy() {
+        suggestionRunnable?.let(suggestionHandler::removeCallbacks)
+        super.onDestroy()
     }
 }
