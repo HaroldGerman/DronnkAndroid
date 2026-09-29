@@ -27,6 +27,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -66,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applySystemInsets()
 
         requestNotificationPermissionIfNeeded()
         bindViews()
@@ -261,6 +264,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun downloadThenPlay(song: Song) {
+        // Si ya existe el video local, Dronnk lo prefiere sobre el MP3.
+        DownloadRepository.preferredLocalMedia(this, song)?.let { local ->
+            LibraryRepository.addHistory(this, local)
+            PlayerManager.playLocal(this, local)
+            showMiniPlayer(local)
+            sectionTitle.text = if (local.mediaType == "video") {
+                "Reproduciendo video desde el dispositivo"
+            } else {
+                "Reproduciendo desde el dispositivo"
+            }
+            return
+        }
+
         loading.visibility = View.VISIBLE
         sectionTitle.text = "Preparando ${song.titulo ?: "canción"}…"
         lifecycleScope.launch {
@@ -332,9 +348,19 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "Preparando video…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             DownloadRepository.downloadVideo(this@MainActivity, song)
-                .onSuccess { Toast.makeText(this@MainActivity, "Video guardado en Movies/Dronnk", Toast.LENGTH_LONG).show() }
-                .onFailure { Toast.makeText(this@MainActivity, "No se pudo descargar el video: ${it.message}", Toast.LENGTH_LONG).show() }
-            loading.visibility = View.GONE
+                .onSuccess { uri ->
+                    val localVideo = DownloadRepository.asDownloadedVideo(song, uri)
+                    LibraryRepository.addHistory(this@MainActivity, localVideo)
+                    PlayerManager.playLocal(this@MainActivity, localVideo)
+                    showMiniPlayer(localVideo)
+                    loading.visibility = View.GONE
+                    Toast.makeText(this@MainActivity, "Video guardado en Movies/Dronnk", Toast.LENGTH_LONG).show()
+                    startActivity(Intent(this@MainActivity, PlayerActivity::class.java))
+                }
+                .onFailure {
+                    loading.visibility = View.GONE
+                    Toast.makeText(this@MainActivity, "No se pudo descargar el video: ${it.message}", Toast.LENGTH_LONG).show()
+                }
         }
     }
 
@@ -477,6 +503,21 @@ class MainActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(send, "Compartir canción"))
+    }
+
+    private fun applySystemInsets() {
+        val root = findViewById<View>(R.id.mainRoot)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(
+                view.paddingLeft,
+                bars.top,
+                view.paddingRight,
+                bars.bottom
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     private fun requestNotificationPermissionIfNeeded() {
