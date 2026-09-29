@@ -71,6 +71,9 @@ object LibraryRepository {
         return runCatching { Gson().fromJson<List<DronnkPlaylist>>(json, type) }.getOrDefault(emptyList())
     }
 
+    fun playlist(context: Context, playlistId: String): DronnkPlaylist? =
+        playlists(context).firstOrNull { it.id == playlistId }
+
     fun createPlaylist(context: Context, name: String): DronnkPlaylist {
         val list = playlists(context).toMutableList()
         val playlist = DronnkPlaylist(name = name.trim())
