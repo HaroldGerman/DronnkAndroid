@@ -14,6 +14,13 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 import com.german.dronnk.R
+import com.german.dronnk.data.RecommendationRepository
+import com.german.dronnk.download.DownloadRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import com.german.dronnk.ui.MainActivity
 
 class PlaybackService : MediaSessionService() {
@@ -22,6 +29,7 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_PLAY_LOCAL = "com.german.dronnk.action.PLAY_LOCAL"
         const val ACTION_TOGGLE = "com.german.dronnk.action.TOGGLE"
         const val ACTION_STOP = "com.german.dronnk.action.STOP"
+        const val ACTION_NEXT = "com.german.dronnk.action.NEXT"
 
         const val EXTRA_URI = "uri"
         const val EXTRA_ID = "id"
@@ -35,6 +43,8 @@ class PlaybackService : MediaSessionService() {
 
     private var session: MediaSession? = null
     private lateinit var player: Player
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var advancing = false
 
     override fun onCreate() {
         super.onCreate()
@@ -45,7 +55,12 @@ class PlaybackService : MediaSessionService() {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) = updateNotification()
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) = updateNotification()
-            override fun onPlaybackStateChanged(playbackState: Int) = updateNotification()
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                updateNotification()
+                if (playbackState == Player.STATE_ENDED) {
+                    playNext()
+                }
+            }
         })
     }
 
@@ -88,6 +103,10 @@ class PlaybackService : MediaSessionService() {
                 updateNotification()
             }
 
+            ACTION_NEXT -> {
+                playNext()
+            }
+
             ACTION_STOP -> {
                 player.pause()
                 player.clearMediaItems()
@@ -119,9 +138,16 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = PendingIntent.getService(
+        val nextIntent = PendingIntent.getService(
             this,
             2,
+            Intent(this, PlaybackService::class.java).setAction(ACTION_NEXT),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val stopIntent = PendingIntent.getService(
+            this,
+            3,
             Intent(this, PlaybackService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -144,12 +170,35 @@ class PlaybackService : MediaSessionService() {
                 if (playing) "Pausar" else "Reproducir",
                 toggleIntent
             )
+            .addAction(R.drawable.ic_next, "Siguiente", nextIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cerrar", stopIntent)
             .setStyle(
                 MediaStyleNotificationHelper.MediaStyle(mediaSession)
-                    .setShowActionsInCompactView(0)
+                    .setShowActionsInCompactView(0, 1)
             )
             .build()
+    }
+
+    private fun playNext() {
+        if (advancing) return
+        val current = PlayerManager.currentSong ?: return
+        advancing = true
+
+        serviceScope.launch {
+            try {
+                val candidate = RecommendationRepository.next(current)
+                if (candidate != null) {
+                    val local = DownloadRepository.preferredLocalMedia(this@PlaybackService, candidate)
+                        ?: DownloadRepository.ensureLocalMp3(this@PlaybackService, candidate).getOrNull()
+
+                    if (local != null) {
+                        PlayerManager.playLocal(this@PlaybackService, local)
+                    }
+                }
+            } finally {
+                advancing = false
+            }
+        }
     }
 
     private fun updateNotification() {
@@ -181,6 +230,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         session?.release()
         session = null
         super.onDestroy()
