@@ -1,27 +1,38 @@
 # Dronnk Android
 
-App Android independiente de TushNH.
+App Android independiente de TushNH, enfocada en reproducción local-first.
 
 ## Flujo principal
 1. Buscar canción.
 2. Tocar canción.
 3. Si ya existe localmente, reproducir de inmediato.
-4. Si no existe, pedir al backend un MP3 preparado.
+4. Si no existe, pedir al backend de Dronnk el MP3 preparado.
 5. Guardarlo en `Music/Dronnk` mediante MediaStore.
-6. Reproducir **solo la URI local** con Media3/ExoPlayer.
+6. Reproducir la URI local con Media3/ExoPlayer.
 
-Este diseño evita depender de streaming durante la reproducción y permite audio con pantalla bloqueada una vez descargado el archivo.
+Una vez descargado el archivo, la reproducción ya no depende del streaming y puede continuar con la pantalla bloqueada.
 
 ## Identidad
 - App: Dronnk
 - Package: `com.german.dronnk`
-- Versión: `1.0` (`versionCode=1`)
+- Versión: `1.1` (`versionCode=2`)
+- Icono propio de Dronnk incluido.
 
-## Backend inicial
-Por compatibilidad, `ApiClient` apunta temporalmente a `https://haroldstream.me/` para búsqueda y preparación del MP3. La arquitectura deja `network/` aislado para cambiarlo después por `api.dronnk...` sin tocar el reproductor.
+## Backend
+`https://dronnk-api-production.up.railway.app/`
 
-## Importante sobre video
-La UI incluye la acción `Descargar video`, pero el backend nuevo de Dronnk debe conectarse a un proveedor de video autorizado. No se mezcló esa función con el flujo automático del MP3.
+Endpoints usados por el cliente actual:
+- `GET /buscar?termino=...`
+- `GET /descargar?url=...`
+- `GET /descargar-video?url=...`
 
-## Abrir
-Abrir la carpeta `DronnkAndroid` en Android Studio, sincronizar Gradle y ejecutar en Android.
+## Interfaz v1.1
+- Búsqueda rediseñada.
+- Cards de canciones.
+- Iconos vectoriales, sin emojis.
+- Favoritos con corazón outline/solid.
+- Menú de opciones.
+- Mini reproductor.
+- Reproductor completo.
+- Descargas de audio y video.
+- Biblioteca, playlists y ajustes.
