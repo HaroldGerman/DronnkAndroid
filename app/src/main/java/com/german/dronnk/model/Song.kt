@@ -11,7 +11,8 @@ data class Song(
     var isFavorite: Boolean = false,
     var isDownloaded: Boolean = false,
     var localPath: String? = null,
-    val sourceUrl: String? = null
+    val sourceUrl: String? = null,
+    val mediaType: String? = null
 )
 
 data class SearchResponse(val canciones: List<Song>)
