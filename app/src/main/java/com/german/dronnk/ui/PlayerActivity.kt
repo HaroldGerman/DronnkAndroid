@@ -1,6 +1,8 @@
 package com.german.dronnk.ui
 
 import android.content.Intent
+import android.content.ClipData
+import android.net.Uri
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -109,7 +111,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun downloadVideo(song: Song) {
-        val source = song.url
+        val source = song.sourceUrl ?: song.url
         if (source.isNullOrBlank() || !source.startsWith("http")) {
             Toast.makeText(this, "Para descargar el video, hazlo desde el resultado de búsqueda original.", Toast.LENGTH_LONG).show()
             return
@@ -123,11 +125,31 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun shareSong(song: Song) {
+        val local = song.localPath ?: song.url
+        if (!local.isNullOrBlank() && (local.startsWith("content://") || local.startsWith("file://"))) {
+            val uri = Uri.parse(local)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "audio/mpeg"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: "Dronnk"}")
+                clipData = ClipData.newRawUri("Dronnk audio", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Compartir canción"))
+            return
+        }
+
+        val source = song.sourceUrl ?: song.url
+        val text = buildString {
+            append(song.titulo ?: "Canción")
+            song.canal?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
+            source?.takeIf { it.startsWith("http") }?.let { append("\n").append(it) }
+        }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: ""}")
+            putExtra(Intent.EXTRA_TEXT, text)
         }
-        startActivity(Intent.createChooser(send, "Compartir"))
+        startActivity(Intent.createChooser(send, "Compartir canción"))
     }
 
     private fun format(ms: Long): String {
