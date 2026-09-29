@@ -1,8 +1,6 @@
 package com.german.dronnk.ui
 
 import android.content.Intent
-import android.content.ClipData
-import android.net.Uri
 import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
@@ -59,9 +57,6 @@ class PlayerActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnBack10).setOnClickListener {
             PlayerManager.player?.let { it.seekTo((it.currentPosition - 10_000L).coerceAtLeast(0L)) }
         }
-        findViewById<ImageButton>(R.id.btnForward10).setOnClickListener {
-            PlayerManager.player?.let { it.seekTo((it.currentPosition + 10_000L).coerceAtMost(it.duration.coerceAtLeast(0L))) }
-        }
         findViewById<ImageButton>(R.id.btnNext).setOnClickListener {
             startService(
                 Intent(this, PlaybackService::class.java)
@@ -77,11 +72,11 @@ class PlayerActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnShare).setOnClickListener {
             PlayerManager.currentSong?.let(::shareSong)
         }
+        findViewById<ImageButton>(R.id.btnPlaylist).setOnClickListener {
+            PlayerManager.currentSong?.let(::showAddToPlaylist)
+        }
         findViewById<ImageButton>(R.id.btnVideo).setOnClickListener {
             PlayerManager.currentSong?.let(::downloadVideo)
-        }
-        findViewById<ImageButton>(R.id.btnMore).setOnClickListener {
-            PlayerManager.currentSong?.let(::shareSong)
         }
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -162,31 +157,64 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun shareSong(song: Song) {
-        val local = song.localPath ?: song.url
-        if (!local.isNullOrBlank() && (local.startsWith("content://") || local.startsWith("file://"))) {
-            val uri = Uri.parse(local)
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "audio/mpeg"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: "Dronnk"}")
-                clipData = ClipData.newRawUri("Dronnk audio", uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(send, "Compartir canción"))
-            return
-        }
+        val source = song.sourceUrl
+            ?: song.url?.takeIf { it.startsWith("http") }
 
-        val source = song.sourceUrl ?: song.url
         val text = buildString {
             append(song.titulo ?: "Canción")
-            song.canal?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
-            source?.takeIf { it.startsWith("http") }?.let { append("\n").append(it) }
+            song.canal?.takeIf { it.isNotBlank() }?.let {
+                append(" — ").append(it)
+            }
+            source?.let {
+                append("\n").append(it)
+            }
         }
+
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(send, "Compartir canción"))
+    }
+
+    private fun showAddToPlaylist(song: Song) {
+        val playlists = LibraryRepository.playlists(this)
+        val names = playlists.map { it.name }.toMutableList()
+        names.add("Nueva playlist")
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Añadir a playlist")
+            .setItems(names.toTypedArray()) { _, which ->
+                if (which == playlists.size) {
+                    val input = android.widget.EditText(this).apply {
+                        hint = "Nombre de la playlist"
+                        setTextColor(Color.WHITE)
+                        setHintTextColor(Color.GRAY)
+                        setPadding(36, 18, 36, 18)
+                    }
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("Nueva playlist")
+                        .setView(input)
+                        .setPositiveButton("Crear") { _, _ ->
+                            val name = input.text.toString().trim()
+                            if (name.isNotBlank()) {
+                                val playlist = LibraryRepository.createPlaylist(this, name)
+                                LibraryRepository.addToPlaylist(this, playlist.id, song)
+                                Toast.makeText(this, "Añadida a $name", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .setNegativeButton("Cancelar", null)
+                        .show()
+                } else {
+                    LibraryRepository.addToPlaylist(this, playlists[which].id, song)
+                    Toast.makeText(
+                        this,
+                        "Añadida a ${playlists[which].name}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            .show()
     }
 
     private fun bindMediaVisual(song: Song) {
