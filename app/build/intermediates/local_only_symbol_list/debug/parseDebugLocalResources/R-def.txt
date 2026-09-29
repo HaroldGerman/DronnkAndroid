@@ -1,0 +1,23 @@
+R_DEF: Internal format may change without notice
+local
+color black
+color muted
+color primary
+color surface
+color text
+id artist
+id cover
+id loading
+id miniArtist
+id miniCover
+id miniPlay
+id miniPlayer
+id miniTitle
+id options
+id searchInput
+id songList
+id title
+layout activity_main
+layout item_song
+string app_name
+style Theme.Dronnk

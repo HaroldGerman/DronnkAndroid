@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.german.dronnk.app-mergeDebugResources-41:/values-small-v4/values-small-v4.xml",
+            "map": [
+                {
+                    "source": "/home/liftel/.gradle/caches/9.3.0/transforms/bc5a524a25a2a9b98223001e9ae8a8ac/transformed/material-1.12.0/res/values-small-v4/values-small-v4.xml",
+                    "from": {
+                        "startLines": "2,3,4,5",
+                        "startColumns": "4,4,4,4",
+                        "startOffsets": "55,128,198,270",
+                        "endColumns": "72,69,71,69",
+                        "endOffsets": "123,193,265,335"
+                    }
+                }
+            ]
+        }
+    ]
+}

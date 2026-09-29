@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#0B0B0F</color>
+    <color name="muted">#A0A0AA</color>
+    <color name="primary">#6F5CF6</color>
+    <color name="surface">#16161D</color>
+    <color name="text">#FFFFFF</color>
+    <string name="app_name">Dronnk</string>
+    <style name="Theme.Dronnk" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/black</item>
+        <item name="colorPrimary">@color/primary</item>
+        <item name="android:navigationBarColor">@color/black</item>
+        <item name="android:statusBarColor">@color/black</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

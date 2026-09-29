@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/black"
+    android:padding="18dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <ImageButton
+            android:id="@+id/btnBack"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_media_previous"
+            android:rotation="180"
+            android:tint="@color/text"
+            android:background="@android:color/transparent"
+            android:contentDescription="Volver" />
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Reproduciendo"
+            android:textColor="@color/muted"
+            android:textStyle="bold" />
+        <ImageButton
+            android:id="@+id/btnMore"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_more"
+            android:tint="@color/text"
+            android:background="@android:color/transparent"
+            android:contentDescription="Opciones" />
+    </LinearLayout>
+
+    <ImageView
+        android:id="@+id/playerCover"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="18dp"
+        android:layout_marginBottom="22dp"
+        android:scaleType="centerCrop"
+        android:background="@drawable/bg_card" />
+
+    <TextView
+        android:id="@+id/playerTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/text"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:maxLines="2" />
+    <TextView
+        android:id="@+id/playerArtist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
+        android:textColor="@color/muted"
+        android:textSize="15sp" />
+
+    <SeekBar
+        android:id="@+id/playerSeek"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:progressTint="@color/primary"
+        android:thumbTint="@color/primary" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <TextView android:id="@+id/currentTime" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="0:00" android:textColor="@color/muted" android:textSize="12sp" />
+        <TextView android:id="@+id/totalTime" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0:00" android:textColor="@color/muted" android:textSize="12sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="82dp"
+        android:gravity="center"
+        android:orientation="horizontal">
+        <ImageButton android:id="@+id/btnBack10" android:layout_width="56dp" android:layout_height="56dp" android:src="@android:drawable/ic_media_rew" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Retroceder 10 segundos" />
+        <ImageButton android:id="@+id/btnPlayPause" android:layout_width="72dp" android:layout_height="72dp" android:layout_marginStart="18dp" android:layout_marginEnd="18dp" android:src="@android:drawable/ic_media_pause" android:tint="@color/text" android:background="@drawable/bg_primary_button" android:contentDescription="Pausa" />
+        <ImageButton android:id="@+id/btnForward10" android:layout_width="56dp" android:layout_height="56dp" android:src="@android:drawable/ic_media_ff" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Adelantar 10 segundos" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:orientation="horizontal"
+        android:gravity="center">
+        <ImageButton android:id="@+id/btnFavorite" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_heart_outline" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Favorito" />
+        <ImageButton android:id="@+id/btnShare" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_share" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Compartir" />
+        <ImageButton android:id="@+id/btnVideo" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_video" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Descargar video" />
+    </LinearLayout>
+</LinearLayout>

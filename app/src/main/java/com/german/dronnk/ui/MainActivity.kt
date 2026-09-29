@@ -1,0 +1,406 @@
+package com.german.dronnk.ui
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.os.Build
+import android.os.Bundle
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import coil.load
+import com.german.dronnk.R
+import com.german.dronnk.data.LibraryRepository
+import com.german.dronnk.download.DownloadRepository
+import com.german.dronnk.model.Song
+import com.german.dronnk.network.ApiClient
+import com.german.dronnk.player.PlayerManager
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import kotlinx.coroutines.launch
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var adapter: SongAdapter
+    private lateinit var loading: ProgressBar
+    private lateinit var miniPlayer: LinearLayout
+    private lateinit var miniTitle: TextView
+    private lateinit var miniArtist: TextView
+    private lateinit var miniCover: ImageView
+    private lateinit var miniPlay: ImageButton
+    private lateinit var songList: RecyclerView
+    private lateinit var searchInput: EditText
+    private lateinit var searchBox: View
+    private lateinit var genreScroll: View
+    private lateinit var screenTitle: TextView
+    private lateinit var sectionTitle: TextView
+    private lateinit var emptyPanel: View
+    private lateinit var emptyTitle: TextView
+    private lateinit var emptyText: TextView
+    private lateinit var emptyAction: TextView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        requestNotificationPermissionIfNeeded()
+        bindViews()
+        setupList()
+        setupSearch()
+        setupGenres()
+        setupNavigation()
+        setupMiniPlayer()
+        showSearchHome()
+    }
+
+    private fun bindViews() {
+        loading = findViewById(R.id.loading)
+        miniPlayer = findViewById(R.id.miniPlayer)
+        miniTitle = findViewById(R.id.miniTitle)
+        miniArtist = findViewById(R.id.miniArtist)
+        miniCover = findViewById(R.id.miniCover)
+        miniPlay = findViewById(R.id.miniPlay)
+        songList = findViewById(R.id.songList)
+        searchInput = findViewById(R.id.searchInput)
+        searchBox = findViewById(R.id.searchBox)
+        genreScroll = findViewById(R.id.genreScroll)
+        screenTitle = findViewById(R.id.screenTitle)
+        sectionTitle = findViewById(R.id.sectionTitle)
+        emptyPanel = findViewById(R.id.emptyPanel)
+        emptyTitle = findViewById(R.id.emptyTitle)
+        emptyText = findViewById(R.id.emptyText)
+        emptyAction = findViewById(R.id.emptyAction)
+    }
+
+    private fun setupList() {
+        adapter = SongAdapter(
+            onClick = ::downloadThenPlay,
+            onOptions = ::showOptions,
+            onFavorite = { song ->
+                val active = LibraryRepository.toggleFavorite(this, song)
+                Toast.makeText(this, if (active) "Añadida a favoritos" else "Quitada de favoritos", Toast.LENGTH_SHORT).show()
+            },
+            isFavorite = { LibraryRepository.isFavorite(this, it) }
+        )
+        songList.layoutManager = LinearLayoutManager(this)
+        songList.adapter = adapter
+    }
+
+    private fun setupSearch() {
+        searchInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || searchInput.text.isNotBlank()) {
+                performSearch(searchInput.text.toString())
+                true
+            } else false
+        }
+        findViewById<ImageButton>(R.id.clearSearch).setOnClickListener {
+            searchInput.setText("")
+            showSearchHome()
+        }
+    }
+
+    private fun setupGenres() {
+        mapOf(
+            R.id.chipReggaeton to "reggaeton",
+            R.id.chipTrap to "trap latino",
+            R.id.chipPop to "pop",
+            R.id.chipSalsa to "salsa",
+            R.id.chipCumbia to "cumbia"
+        ).forEach { (id, query) ->
+            findViewById<View>(id).setOnClickListener {
+                searchInput.setText(query)
+                performSearch(query)
+            }
+        }
+    }
+
+    private fun setupNavigation() {
+        findViewById<View>(R.id.navSearch).setOnClickListener { showSearchHome() }
+        findViewById<View>(R.id.navDownloads).setOnClickListener { showDownloads() }
+        findViewById<View>(R.id.navFavorites).setOnClickListener { showFavorites() }
+        findViewById<View>(R.id.navPlaylists).setOnClickListener { showPlaylists() }
+        findViewById<View>(R.id.navSettings).setOnClickListener { showSettings() }
+    }
+
+    private fun setupMiniPlayer() {
+        miniPlay.setOnClickListener {
+            PlayerManager.toggle()
+            refreshMiniPlayIcon()
+        }
+        miniPlayer.setOnClickListener {
+            if (PlayerManager.currentSong != null) {
+                startActivity(Intent(this, PlayerActivity::class.java))
+            }
+        }
+    }
+
+    private fun showSearchHome() {
+        screenTitle.text = "Dronnk"
+        searchBox.visibility = View.VISIBLE
+        genreScroll.visibility = View.VISIBLE
+        emptyPanel.visibility = View.GONE
+        songList.visibility = View.VISIBLE
+        val history = LibraryRepository.history(this)
+        if (history.isNotEmpty()) {
+            sectionTitle.text = "Reproducidas recientemente"
+            adapter.submit(history.take(12))
+        } else {
+            sectionTitle.text = "Busca lo que quieras escuchar"
+            adapter.submit(emptyList())
+            showEmpty(
+                "Tu música empieza aquí",
+                "Busca una canción o artista. Al tocarla, Dronnk la descargará y reproducirá desde tu teléfono.",
+                null
+            )
+        }
+    }
+
+    private fun performSearch(query: String) {
+        val clean = query.trim()
+        if (clean.isBlank()) return
+        LibraryRepository.addSearch(this, clean)
+        sectionTitle.text = "Resultados para “$clean”"
+        emptyPanel.visibility = View.GONE
+        songList.visibility = View.VISIBLE
+        loading.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            try {
+                val result = ApiClient.api.buscar(clean)
+                adapter.submit(result.canciones)
+                if (result.canciones.isEmpty()) {
+                    showEmpty("Sin resultados", "Prueba con otro artista o nombre de canción.", null)
+                }
+            } catch (e: Exception) {
+                showEmpty("No se pudo buscar", "Revisa tu conexión e inténtalo nuevamente.", "Reintentar") {
+                    performSearch(clean)
+                }
+            } finally {
+                loading.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun downloadThenPlay(song: Song) {
+        loading.visibility = View.VISIBLE
+        sectionTitle.text = "Preparando ${song.titulo ?: "canción"}…"
+        lifecycleScope.launch {
+            val result = DownloadRepository.ensureLocalMp3(this@MainActivity, song)
+            loading.visibility = View.GONE
+            result.onSuccess { local ->
+                LibraryRepository.addHistory(this@MainActivity, local)
+                PlayerManager.playLocal(this@MainActivity, local)
+                showMiniPlayer(local)
+                sectionTitle.text = "Reproduciendo desde el dispositivo"
+            }.onFailure {
+                Toast.makeText(this@MainActivity, "No se pudo descargar el MP3: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showMiniPlayer(song: Song) {
+        miniPlayer.visibility = View.VISIBLE
+        miniTitle.text = song.titulo ?: "Canción"
+        miniArtist.text = song.canal ?: "Dronnk"
+        miniCover.load(song.thumbnail) {
+            placeholder(R.drawable.dronnk_app_icon)
+            error(R.drawable.dronnk_app_icon)
+        }
+        refreshMiniPlayIcon()
+    }
+
+    private fun refreshMiniPlayIcon() {
+        miniPlay.setImageResource(if (PlayerManager.player?.isPlaying == true) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play)
+    }
+
+    private fun showOptions(song: Song) {
+        val sheet = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.layout_song_options, null)
+        sheet.setContentView(view)
+        view.findViewById<TextView>(R.id.optionsTitle).text = song.titulo ?: "Dronnk"
+        view.findViewById<TextView>(R.id.optionsArtist).text = song.canal ?: ""
+
+        val isFavorite = LibraryRepository.isFavorite(this, song)
+        view.findViewById<TextView>(R.id.actionFavoriteText).text = if (isFavorite) "Quitar de favoritos" else "Añadir a favoritos"
+        view.findViewById<ImageView>(R.id.actionFavoriteIcon).setImageResource(if (isFavorite) R.drawable.ic_heart_solid else R.drawable.ic_heart_outline)
+
+        view.findViewById<View>(R.id.actionAudio).setOnClickListener {
+            sheet.dismiss()
+            downloadThenPlay(song)
+        }
+        view.findViewById<View>(R.id.actionVideo).setOnClickListener {
+            sheet.dismiss()
+            downloadVideo(song)
+        }
+        view.findViewById<View>(R.id.actionFavorite).setOnClickListener {
+            LibraryRepository.toggleFavorite(this, song)
+            adapter.notifyDataSetChanged()
+            sheet.dismiss()
+        }
+        view.findViewById<View>(R.id.actionPlaylist).setOnClickListener {
+            sheet.dismiss()
+            showAddToPlaylist(song)
+        }
+        view.findViewById<View>(R.id.actionShare).setOnClickListener {
+            sheet.dismiss()
+            shareSong(song)
+        }
+        sheet.show()
+    }
+
+    private fun downloadVideo(song: Song) {
+        loading.visibility = View.VISIBLE
+        Toast.makeText(this, "Preparando video…", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            DownloadRepository.downloadVideo(this@MainActivity, song)
+                .onSuccess { Toast.makeText(this@MainActivity, "Video guardado en Movies/Dronnk", Toast.LENGTH_LONG).show() }
+                .onFailure { Toast.makeText(this@MainActivity, "No se pudo descargar el video: ${it.message}", Toast.LENGTH_LONG).show() }
+            loading.visibility = View.GONE
+        }
+    }
+
+    private fun showDownloads() {
+        screenTitle.text = "Descargas"
+        searchBox.visibility = View.GONE
+        genreScroll.visibility = View.GONE
+        sectionTitle.text = "Audio guardado en Music/Dronnk"
+        val songs = DownloadRepository.downloadedAudio(this)
+        if (songs.isEmpty()) {
+            showEmpty("Aún no tienes descargas", "Las canciones que reproduzcas aparecerán aquí automáticamente.", null)
+        } else {
+            emptyPanel.visibility = View.GONE
+            songList.visibility = View.VISIBLE
+            adapter.submit(songs)
+        }
+    }
+
+    private fun showFavorites() {
+        screenTitle.text = "Favoritos"
+        searchBox.visibility = View.GONE
+        genreScroll.visibility = View.GONE
+        sectionTitle.text = "Tus canciones guardadas"
+        val songs = LibraryRepository.favorites(this)
+        if (songs.isEmpty()) {
+            showEmpty("Sin favoritos", "Usa el icono de corazón para guardar canciones aquí.", null)
+        } else {
+            emptyPanel.visibility = View.GONE
+            songList.visibility = View.VISIBLE
+            adapter.submit(songs)
+        }
+    }
+
+    private fun showPlaylists() {
+        screenTitle.text = "Playlists"
+        searchBox.visibility = View.GONE
+        genreScroll.visibility = View.GONE
+        sectionTitle.text = "Organiza tu música"
+        val playlists = LibraryRepository.playlists(this)
+        val description = if (playlists.isEmpty()) {
+            "Crea tu primera playlist y añade canciones desde el menú de cada resultado."
+        } else {
+            playlists.joinToString("\n") { "${it.name} · ${it.songs.size} canciones" }
+        }
+        showEmpty("Tus playlists", description, "Nueva playlist") { createPlaylistDialog() }
+    }
+
+    private fun showSettings() {
+        screenTitle.text = "Ajustes"
+        searchBox.visibility = View.GONE
+        genreScroll.visibility = View.GONE
+        sectionTitle.text = "Configuración"
+        showEmpty(
+            "Dronnk 1.0",
+            "Audio: MP3 · 192 kbps\nCarpeta de audio: Music/Dronnk\nCarpeta de video: Movies/Dronnk\nReproducción: archivo local",
+            null
+        )
+    }
+
+    private fun showEmpty(title: String, text: String, action: String?, onAction: (() -> Unit)? = null) {
+        songList.visibility = View.GONE
+        emptyPanel.visibility = View.VISIBLE
+        emptyTitle.text = title
+        emptyText.text = text
+        if (action != null) {
+            emptyAction.visibility = View.VISIBLE
+            emptyAction.text = action
+            emptyAction.setOnClickListener { onAction?.invoke() }
+        } else {
+            emptyAction.visibility = View.GONE
+            emptyAction.setOnClickListener(null)
+        }
+    }
+
+    private fun createPlaylistDialog(afterCreate: ((String) -> Unit)? = null) {
+        val input = EditText(this).apply {
+            hint = "Nombre de la playlist"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            setPadding(36, 18, 36, 18)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Nueva playlist")
+            .setView(input)
+            .setPositiveButton("Crear") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isNotBlank()) {
+                    val playlist = LibraryRepository.createPlaylist(this, name)
+                    afterCreate?.invoke(playlist.id)
+                    showPlaylists()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun showAddToPlaylist(song: Song) {
+        val playlists = LibraryRepository.playlists(this)
+        val names = playlists.map { it.name }.toMutableList()
+        names.add("Nueva playlist")
+        AlertDialog.Builder(this)
+            .setTitle("Añadir a playlist")
+            .setItems(names.toTypedArray()) { _, which ->
+                if (which == playlists.size) {
+                    createPlaylistDialog { id ->
+                        LibraryRepository.addToPlaylist(this, id, song)
+                        Toast.makeText(this, "Canción añadida", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    LibraryRepository.addToPlaylist(this, playlists[which].id, song)
+                    Toast.makeText(this, "Añadida a ${playlists[which].name}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .show()
+    }
+
+    private fun shareSong(song: Song) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: ""}")
+        }
+        startActivity(Intent.createChooser(send, "Compartir"))
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 300)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        PlayerManager.currentSong?.let { showMiniPlayer(it) }
+    }
+}

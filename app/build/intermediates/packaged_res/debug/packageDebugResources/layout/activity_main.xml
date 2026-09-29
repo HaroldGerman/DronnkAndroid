@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/black" android:padding="16dp">
+
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="Dronnk" android:textColor="@color/text" android:textStyle="bold" android:textSize="28sp" />
+
+    <EditText android:id="@+id/searchInput" android:layout_width="match_parent" android:layout_height="52dp"
+        android:layout_marginTop="16dp" android:hint="Busca cualquier canción" android:singleLine="true"
+        android:textColor="@color/text" android:textColorHint="@color/muted" android:backgroundTint="@color/primary" />
+
+    <ProgressBar android:id="@+id/loading" android:layout_width="32dp" android:layout_height="32dp"
+        android:layout_gravity="center" android:visibility="gone" android:layout_margin="8dp" />
+
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/songList"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+
+    <LinearLayout android:id="@+id/miniPlayer" android:layout_width="match_parent" android:layout_height="72dp"
+        android:orientation="horizontal" android:gravity="center_vertical" android:padding="10dp"
+        android:background="@color/surface" android:visibility="gone">
+        <ImageView android:id="@+id/miniCover" android:layout_width="52dp" android:layout_height="52dp" />
+        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:orientation="vertical" android:paddingStart="12dp">
+            <TextView android:id="@+id/miniTitle" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/text" android:textStyle="bold" android:maxLines="1" />
+            <TextView android:id="@+id/miniArtist" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/muted" android:maxLines="1" />
+        </LinearLayout>
+        <ImageButton android:id="@+id/miniPlay" android:layout_width="48dp" android:layout_height="48dp"
+            android:src="@android:drawable/ic_media_pause" android:background="@android:color/transparent" android:tint="@color/text" />
+    </LinearLayout>
+</LinearLayout>

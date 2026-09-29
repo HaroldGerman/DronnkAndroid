@@ -1,0 +1,4 @@
+com.german.dronnk.test.app-androidTest-0 /home/liftel/DronnkAndroid/app/build/generated/res/resValues/androidTest/debug
+com.german.dronnk.test.app-mergeDebugAndroidTestResources-1 /home/liftel/DronnkAndroid/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/merged.dir
+com.german.dronnk.test.app-mergeDebugAndroidTestResources-2 /home/liftel/DronnkAndroid/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/stripped.dir
+com.german.dronnk.test.app-debugAndroidTest-3 /home/liftel/DronnkAndroid/app/build/intermediates/merged_res/debugAndroidTest/mergeDebugAndroidTestResources

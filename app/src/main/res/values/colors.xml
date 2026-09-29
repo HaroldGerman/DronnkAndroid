@@ -1,0 +1,13 @@
+<resources>
+    <color name="black">#09090D</color>
+    <color name="surface">#14141B</color>
+    <color name="surface_2">#1B1B24</color>
+    <color name="surface_3">#23232E</color>
+    <color name="primary">#7C4DFF</color>
+    <color name="primary_2">#9A67FF</color>
+    <color name="text">#F7F7FA</color>
+    <color name="muted">#9A9AA6</color>
+    <color name="divider">#2B2B35</color>
+    <color name="success">#4CC38A</color>
+    <color name="danger">#FF5E6C</color>
+</resources>
