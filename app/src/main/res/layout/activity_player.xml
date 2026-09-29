@@ -99,7 +99,8 @@
         android:gravity="center"
         android:orientation="horizontal">
         <ImageButton android:id="@+id/btnBack10" android:layout_width="56dp" android:layout_height="56dp" android:src="@android:drawable/ic_media_rew" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Retroceder 10 segundos" />
-        <ImageButton android:id="@+id/btnPlayPause" android:layout_width="72dp" android:layout_height="72dp" android:layout_marginStart="18dp" android:layout_marginEnd="18dp" android:src="@android:drawable/ic_media_pause" android:tint="@color/text" android:background="@drawable/bg_primary_button" android:contentDescription="Pausa" />
+        <ImageButton android:id="@+id/btnPlayPause" android:layout_width="72dp" android:layout_height="72dp" android:layout_marginStart="14dp" android:layout_marginEnd="14dp" android:src="@android:drawable/ic_media_pause" android:tint="@color/text" android:background="@drawable/bg_primary_button" android:contentDescription="Pausa" />
+        <ImageButton android:id="@+id/btnNext" android:layout_width="52dp" android:layout_height="52dp" android:src="@drawable/ic_next" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Siguiente canción" />
         <ImageButton android:id="@+id/btnForward10" android:layout_width="56dp" android:layout_height="56dp" android:src="@android:drawable/ic_media_ff" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Adelantar 10 segundos" />
     </LinearLayout>
 
