@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaSession
@@ -48,7 +49,23 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        player = PlayerManager.getOrCreate(this)
+        val basePlayer = PlayerManager.getOrCreate(this)
+        player = object : ForwardingPlayer(basePlayer) {
+            override fun getAvailableCommands(): Player.Commands {
+                return super.getAvailableCommands()
+                    .buildUpon()
+                    .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    .build()
+            }
+
+            override fun seekToNextMediaItem() {
+                playNext()
+            }
+
+            override fun seekToNext() {
+                playNext()
+            }
+        }
         session = MediaSession.Builder(this, player).build()
         createChannel()
 
