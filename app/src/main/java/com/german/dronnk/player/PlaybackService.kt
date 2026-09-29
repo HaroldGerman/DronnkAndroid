@@ -55,6 +55,7 @@ class PlaybackService : MediaSessionService() {
                 return super.getAvailableCommands()
                     .buildUpon()
                     .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    .add(Player.COMMAND_SEEK_TO_NEXT)
                     .build()
             }
 
