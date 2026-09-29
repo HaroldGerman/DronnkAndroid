@@ -39,7 +39,7 @@
                 android:src="@drawable/ic_search"
                 android:tint="@color/muted" />
 
-            <EditText
+            <AutoCompleteTextView
                 android:id="@+id/searchInput"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
@@ -49,6 +49,9 @@
                 android:singleLine="true"
                 android:imeOptions="actionSearch"
                 android:inputType="text"
+                android:completionThreshold="2"
+                android:dropDownHeight="wrap_content"
+                android:popupBackground="@color/surface"
                 android:textColor="@color/text"
                 android:textColorHint="@color/muted"
                 android:background="@android:color/transparent" />
