@@ -2,12 +2,9 @@ package com.german.dronnk.player
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.german.dronnk.model.Song
 
@@ -28,7 +25,7 @@ object PlayerManager {
                 true
             )
             p.setHandleAudioBecomingNoisy(true)
-            p.repeatMode = Player.REPEAT_MODE_OFF
+            p.setWakeMode(C.WAKE_MODE_LOCAL)
             player = p
         }
     }
@@ -39,34 +36,21 @@ object PlayerManager {
             "Dronnk solo reproduce archivos locales"
         }
 
-        val p = getOrCreate(context)
-        val media = MediaItem.Builder()
-            .setMediaId(song.id ?: uriText)
-            .setUri(Uri.parse(uriText))
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(song.titulo ?: "Canción")
-                    .setArtist(song.canal ?: "Dronnk")
-                    .setAlbumTitle("Dronnk")
-                    .setArtworkUri(song.thumbnail?.takeIf { it.startsWith("http") }?.let(Uri::parse))
-                    .build()
-            )
-            .build()
-
         currentSong = song
-        p.setMediaItem(media)
-        p.prepare()
-        p.play()
 
-        // El servicio se inicia DESPUÉS de poner el player en reproducción.
-        // MediaSessionService se encarga de la notificación multimedia/lockscreen.
-        context.startService(Intent(context, PlaybackService::class.java))
+        val intent = Intent(context, PlaybackService::class.java).apply {
+            action = PlaybackService.ACTION_PLAY_LOCAL
+            putExtra(PlaybackService.EXTRA_URI, uriText)
+            putExtra(PlaybackService.EXTRA_ID, song.id)
+            putExtra(PlaybackService.EXTRA_TITLE, song.titulo)
+            putExtra(PlaybackService.EXTRA_ARTIST, song.canal)
+            putExtra(PlaybackService.EXTRA_ARTWORK, song.thumbnail)
+        }
+        ContextCompat.startForegroundService(context.applicationContext, intent)
     }
 
     fun toggle() {
-        player?.let {
-            if (it.isPlaying) it.pause() else it.play()
-        }
+        player?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
     fun release() {
