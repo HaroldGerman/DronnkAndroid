@@ -46,13 +46,13 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
 
-        bindCurrentSong(song)
-
         seek = findViewById(R.id.playerSeek)
         current = findViewById(R.id.currentTime)
         total = findViewById(R.id.totalTime)
         playPause = findViewById(R.id.btnPlayPause)
         favorite = findViewById(R.id.btnFavorite)
+
+        bindCurrentSong(song)
 
         findViewById<ImageButton>(R.id.btnBack).setOnClickListener { finish() }
         playPause.setOnClickListener { PlayerManager.toggle(); refreshPlayIcon() }
