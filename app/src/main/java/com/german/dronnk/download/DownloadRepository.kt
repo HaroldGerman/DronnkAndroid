@@ -22,6 +22,7 @@ import kotlin.math.roundToInt
 object DownloadRepository {
     private const val DOWNLOAD_CHANNEL = "dronnk_downloads"
     private const val VIDEO_NOTIFICATION_ID = 4102
+    private const val MEDIA_LINK_PREFS = "dronnk_media_links"
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -44,13 +45,14 @@ object DownloadRepository {
             val uri = saveMedia(
                 context = context,
                 url = prepared.url,
-                displayName = "${safeName(finalTitle)}.mp3",
+                displayName = "${stableSongId(song)}__${safeName(finalTitle)}.mp3",
                 mime = "audio/mpeg",
                 relativePath = "Music/Dronnk",
                 collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                     MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
                 else MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
             )
+            saveMediaLink(context, "audio", song, uri)
             song.copy(
                 titulo = finalTitle,
                 canal = prepared.canal ?: song.canal,
@@ -81,7 +83,7 @@ object DownloadRepository {
             val uri = saveMedia(
                 context = context,
                 url = prepared.url,
-                displayName = "${safeName(title)}.mp4",
+                displayName = "${stableSongId(song)}__${safeName(title)}.mp4",
                 mime = "video/mp4",
                 relativePath = "Movies/Dronnk",
                 collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
@@ -89,6 +91,7 @@ object DownloadRepository {
                 else MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 onProgress = { percent -> showVideoProgress(context, title, percent, false) }
             )
+            saveMediaLink(context, "video", song, uri)
             showVideoComplete(context, title)
             uri
         }.onFailure {
@@ -159,7 +162,8 @@ object DownloadRepository {
                         duracion = formatDuration(durationMs),
                         url = uri.toString(),
                         localPath = uri.toString(),
-                        isDownloaded = true
+                        isDownloaded = true,
+                        mediaType = "audio"
                     )
                 }
             }
@@ -177,51 +181,146 @@ object DownloadRepository {
         name.replace(Regex("[\\/:*?\"<>|]"), "_").take(100)
 
     private fun findExistingAudio(context: Context, song: Song): Uri? {
+        resolveSavedLink(context, "audio", song)?.let { return it }
+
+        val songId = song.id?.takeIf { it.isNotBlank() }
         val title = safeName(song.titulo ?: return null)
         val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DISPLAY_NAME)
+
         context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             projection,
-            "${MediaStore.Audio.Media.DISPLAY_NAME}=?",
-            arrayOf("$title.mp3"),
-            null
+            null,
+            null,
+            "${MediaStore.Audio.Media.DATE_ADDED} DESC"
         )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID))
-                return ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+            while (cursor.moveToNext()) {
+                val displayName = cursor.getString(nameCol) ?: continue
+                val matchesId = songId != null && displayName.startsWith("$songId__")
+                val matchesLegacyTitle = displayName.equals("$title.mp3", ignoreCase = true)
+                val matchesNormalizedTitle =
+                    canonicalMediaTitle(displayName.removeSuffix(".mp3").substringAfter("__")) ==
+                        canonicalMediaTitle(title)
+
+                if (matchesId || matchesLegacyTitle || matchesNormalizedTitle) {
+                    val uri = ContentUris.withAppendedId(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        cursor.getLong(idCol)
+                    )
+                    saveMediaLink(context, "audio", song, uri)
+                    return uri
+                }
             }
         }
         return null
     }
 
     private fun findExistingVideo(context: Context, song: Song): Uri? {
+        resolveSavedLink(context, "video", song)?.let { return it }
+
+        val songId = song.id?.takeIf { it.isNotBlank() }
         val title = safeName(song.titulo ?: return null)
-        val projection = arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME)
+        val projection = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.RELATIVE_PATH
+        )
+
         val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            "${MediaStore.Video.Media.DISPLAY_NAME}=? AND ${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?"
-        } else {
-            "${MediaStore.Video.Media.DISPLAY_NAME}=?"
-        }
+            "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?"
+        } else null
         val args = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            arrayOf("$title.mp4", "Movies/Dronnk%")
-        } else {
-            arrayOf("$title.mp4")
-        }
+            arrayOf("Movies/Dronnk%")
+        } else null
 
         context.contentResolver.query(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
             projection,
             selection,
             args,
-            null
+            "${MediaStore.Video.Media.DATE_ADDED} DESC"
         )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID))
-                return ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+
+            while (cursor.moveToNext()) {
+                val displayName = cursor.getString(nameCol) ?: continue
+                val baseName = displayName.removeSuffix(".mp4")
+                val matchesId = songId != null && displayName.startsWith("$songId__")
+                val matchesLegacyTitle = displayName.equals("$title.mp4", ignoreCase = true)
+                val matchesNormalizedTitle =
+                    canonicalMediaTitle(baseName.substringAfter("__")) ==
+                        canonicalMediaTitle(title)
+
+                if (matchesId || matchesLegacyTitle || matchesNormalizedTitle) {
+                    val uri = ContentUris.withAppendedId(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        cursor.getLong(idCol)
+                    )
+                    saveMediaLink(context, "video", song, uri)
+                    return uri
+                }
             }
         }
         return null
     }
+
+    private fun stableSongId(song: Song): String {
+        val raw = song.id
+            ?.takeIf { it.isNotBlank() }
+            ?: song.sourceUrl
+            ?.substringAfter("v=", "")
+            ?.substringBefore("&")
+            ?.takeIf { it.isNotBlank() }
+            ?: song.url
+            ?.substringAfter("v=", "")
+            ?.substringBefore("&")
+            ?.takeIf { it.isNotBlank() }
+            ?: safeName(song.titulo ?: "dronnk")
+
+        return raw.replace(Regex("[^A-Za-z0-9_-]"), "_").take(80)
+    }
+
+    private fun mediaLinkKey(type: String, song: Song): String =
+        "$type:${stableSongId(song)}"
+
+    private fun saveMediaLink(context: Context, type: String, song: Song, uri: Uri) {
+        context.getSharedPreferences(MEDIA_LINK_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(mediaLinkKey(type, song), uri.toString())
+            .apply()
+    }
+
+    private fun resolveSavedLink(context: Context, type: String, song: Song): Uri? {
+        val prefs = context.getSharedPreferences(MEDIA_LINK_PREFS, Context.MODE_PRIVATE)
+        val key = mediaLinkKey(type, song)
+        val value = prefs.getString(key, null) ?: return null
+        val uri = Uri.parse(value)
+
+        val exists = runCatching {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+        }.getOrDefault(false)
+
+        if (exists) return uri
+
+        prefs.edit().remove(key).apply()
+        return null
+    }
+
+    private fun canonicalMediaTitle(value: String): String =
+        value.lowercase()
+            .replace(Regex("""\([^)]*\)|\[[^]]*]"""), " ")
+            .replace(
+                Regex(
+                    """\b(official|video|audio|lyrics?|lyric|visualizer|music|hd|4k|remaster(ed)?|live|version|clean|explicit)\b"""
+                ),
+                " "
+            )
+            .replace(Regex("[^a-z0-9 ]"), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
 
     private fun saveMedia(
         context: Context,
