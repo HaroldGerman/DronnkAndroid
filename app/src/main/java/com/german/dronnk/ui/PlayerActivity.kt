@@ -14,6 +14,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.media3.ui.PlayerView
 import coil.load
 import com.german.dronnk.R
 import com.german.dronnk.data.LibraryRepository
@@ -33,6 +36,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
+        applySystemInsets()
 
         val song = PlayerManager.currentSong
         if (song == null) {
@@ -40,11 +44,7 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
 
-        findViewById<ImageView>(R.id.playerCover).load(song.thumbnail) {
-            placeholder(R.drawable.dronnk_app_icon)
-            error(R.drawable.dronnk_app_icon)
-            crossfade(true)
-        }
+        bindMediaVisual(song)
         findViewById<TextView>(R.id.playerTitle).text = song.titulo ?: "Canción"
         findViewById<TextView>(R.id.playerArtist).text = song.canal ?: "Dronnk"
 
@@ -113,14 +113,25 @@ class PlayerActivity : AppCompatActivity() {
     private fun downloadVideo(song: Song) {
         val source = song.sourceUrl ?: song.url
         if (source.isNullOrBlank() || !source.startsWith("http")) {
-            Toast.makeText(this, "Para descargar el video, hazlo desde el resultado de búsqueda original.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No está disponible la URL original del video.", Toast.LENGTH_LONG).show()
             return
         }
+
         Toast.makeText(this, "Preparando video…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             DownloadRepository.downloadVideo(this@PlayerActivity, song)
-                .onSuccess { Toast.makeText(this@PlayerActivity, "Video guardado en Movies/Dronnk", Toast.LENGTH_LONG).show() }
-                .onFailure { Toast.makeText(this@PlayerActivity, "No se pudo descargar el video: ${it.message}", Toast.LENGTH_LONG).show() }
+                .onSuccess { uri ->
+                    val localVideo = DownloadRepository.asDownloadedVideo(song, uri)
+                    LibraryRepository.addHistory(this@PlayerActivity, localVideo)
+                    PlayerManager.playLocal(this@PlayerActivity, localVideo)
+                    bindMediaVisual(localVideo)
+                    findViewById<TextView>(R.id.playerTitle).text = localVideo.titulo ?: "Canción"
+                    findViewById<TextView>(R.id.playerArtist).text = localVideo.canal ?: "Dronnk"
+                    Toast.makeText(this@PlayerActivity, "Video guardado y reproduciendo", Toast.LENGTH_LONG).show()
+                }
+                .onFailure {
+                    Toast.makeText(this@PlayerActivity, "No se pudo descargar el video: ${it.message}", Toast.LENGTH_LONG).show()
+                }
         }
     }
 
@@ -150,6 +161,43 @@ class PlayerActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(send, "Compartir canción"))
+    }
+
+    private fun bindMediaVisual(song: Song) {
+        val playerView = findViewById<PlayerView>(R.id.playerVideo)
+        val cover = findViewById<ImageView>(R.id.playerCover)
+
+        if (song.mediaType == "video") {
+            cover.visibility = android.view.View.GONE
+            playerView.visibility = android.view.View.VISIBLE
+            playerView.player = PlayerManager.player
+        } else {
+            playerView.player = null
+            playerView.visibility = android.view.View.GONE
+            cover.visibility = android.view.View.VISIBLE
+            cover.load(song.thumbnail) {
+                placeholder(R.drawable.dronnk_app_icon)
+                error(R.drawable.dronnk_app_icon)
+                crossfade(true)
+            }
+        }
+    }
+
+    private fun applySystemInsets() {
+        val root = findViewById<android.view.View>(R.id.playerRoot)
+        val density = resources.displayMetrics.density
+        val base = (18f * density).toInt()
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(
+                base,
+                base + bars.top,
+                base,
+                base + bars.bottom
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     private fun format(ms: Long): String {
