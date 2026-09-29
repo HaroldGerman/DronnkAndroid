@@ -11,8 +11,8 @@ android {
         applicationId = "com.german.dronnk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
     }
 
     buildTypes {
@@ -43,4 +43,5 @@ dependencies {
     implementation("io.coil-kt:coil:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.6.1")
     implementation("androidx.media3:media3-session:1.6.1")
+    implementation("androidx.media3:media3-ui:1.6.1")
 }
