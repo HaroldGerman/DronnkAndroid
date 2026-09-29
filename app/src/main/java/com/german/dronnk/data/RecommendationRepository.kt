@@ -17,12 +17,16 @@ object RecommendationRepository {
                 add(artist)
                 add("$artist canciones")
             }
+
             val titleWords = current.titulo.orEmpty()
                 .split(" ")
                 .filter { it.length >= 4 }
                 .take(2)
                 .joinToString(" ")
-            if (titleWords.isNotBlank()) add("$titleWords music")
+
+            if (titleWords.isNotBlank()) {
+                add("$titleWords music")
+            }
         }.distinct()
 
         for (query in queries) {
@@ -35,32 +39,41 @@ object RecommendationRepository {
                     val differentTitle = candidateTitle.isNotBlank() &&
                         candidateTitle != currentTitle &&
                         !sameBaseTitle(candidateTitle, currentTitle)
+
                     differentId && differentTitle
                 }
                 .sortedByDescending { candidate ->
-                    if (artist.isNotBlank() && candidate.canal.orEmpty().contains(artist, ignoreCase = true)) 1 else 0
+                    if (
+                        artist.isNotBlank() &&
+                        candidate.canal.orEmpty().contains(artist, ignoreCase = true)
+                    ) 1 else 0
                 }
 
-            if (candidates.isNotEmpty()) return candidates.first()
+            if (candidates.isNotEmpty()) {
+                return candidates.first()
+            }
         }
+
         return null
     }
 
     private fun canonicalTitle(value: String): String {
         val normalized = Normalizer.normalize(value, Normalizer.Form.NFD)
-            .replace(Regex("""\\p{Mn}+"""), "")
+            .replace(Regex("""\p{Mn}+"""), "")
             .lowercase(Locale.ROOT)
-            .replace(Regex("""\\([^)]*\\)|\\[[^]]*]"""), " ")
+            .replace(Regex("""\([^)]*\)|\[[^]]*]"""), " ")
             .replace(
-                Regex("""\\b(official|video|audio|lyrics?|lyric|visualizer|music|hd|4k|remaster(ed)?|live|version|clean|explicit)\\b"""),
+                Regex(
+                    """\b(official|video|audio|lyrics?|lyric|visualizer|music|hd|4k|remaster(ed)?|live|version|clean|explicit)\b"""
+                ),
                 " "
             )
-            .replace(Regex("""\\s+"""), " ")
+            .replace(Regex("""\s+"""), " ")
             .trim()
 
         return normalized
             .replace(Regex("[^a-z0-9 ]"), " ")
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("""\s+"""), " ")
             .trim()
     }
 
