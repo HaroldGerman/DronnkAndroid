@@ -48,16 +48,14 @@ object RecommendationRepository {
 
     private fun canonicalTitle(value: String): String {
         val normalized = Normalizer.normalize(value, Normalizer.Form.NFD)
-            .replace(Regex("\p{Mn}+"), "")
+            .replace(Regex("""\\p{Mn}+"""), "")
             .lowercase(Locale.ROOT)
-            .replace(Regex("\([^)]*\)|\[[^]]*]"), " ")
+            .replace(Regex("""\\([^)]*\\)|\\[[^]]*]"""), " ")
             .replace(
-                Regex(
-                    "\b(official|video|audio|lyrics?|lyric|visualizer|music|hd|4k|remaster(ed)?|live|version|clean|explicit)\b"
-                ),
+                Regex("""\\b(official|video|audio|lyrics?|lyric|visualizer|music|hd|4k|remaster(ed)?|live|version|clean|explicit)\\b"""),
                 " "
             )
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("""\\s+"""), " ")
             .trim()
 
         return normalized
