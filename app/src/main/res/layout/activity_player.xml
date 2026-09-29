@@ -17,8 +17,7 @@
             android:id="@+id/btnBack"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@android:drawable/ic_media_previous"
-            android:rotation="180"
+            android:src="@drawable/ic_chevron_down"
             android:tint="@color/text"
             android:background="@android:color/transparent"
             android:contentDescription="Volver" />
@@ -30,14 +29,9 @@
             android:text="Reproduciendo"
             android:textColor="@color/muted"
             android:textStyle="bold" />
-        <ImageButton
-            android:id="@+id/btnMore"
+        <View
             android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:src="@drawable/ic_more"
-            android:tint="@color/text"
-            android:background="@android:color/transparent"
-            android:contentDescription="Opciones" />
+            android:layout_height="44dp" />
     </LinearLayout>
 
     <FrameLayout
@@ -101,7 +95,7 @@
         <ImageButton android:id="@+id/btnBack10" android:layout_width="56dp" android:layout_height="56dp" android:src="@android:drawable/ic_media_rew" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Retroceder 10 segundos" />
         <ImageButton android:id="@+id/btnPlayPause" android:layout_width="72dp" android:layout_height="72dp" android:layout_marginStart="14dp" android:layout_marginEnd="14dp" android:src="@android:drawable/ic_media_pause" android:tint="@color/text" android:background="@drawable/bg_primary_button" android:contentDescription="Pausa" />
         <ImageButton android:id="@+id/btnNext" android:layout_width="52dp" android:layout_height="52dp" android:src="@drawable/ic_next" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Siguiente canción" />
-        <ImageButton android:id="@+id/btnForward10" android:layout_width="56dp" android:layout_height="56dp" android:src="@android:drawable/ic_media_ff" android:tint="@color/text" android:background="@android:color/transparent" android:contentDescription="Adelantar 10 segundos" />
+
     </LinearLayout>
 
     <LinearLayout
@@ -110,6 +104,7 @@
         android:orientation="horizontal"
         android:gravity="center">
         <ImageButton android:id="@+id/btnFavorite" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_heart_outline" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Favorito" />
+        <ImageButton android:id="@+id/btnPlaylist" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_playlist" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Añadir a playlist" />
         <ImageButton android:id="@+id/btnShare" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_share" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Compartir" />
         <ImageButton android:id="@+id/btnVideo" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/ic_video" android:tint="@color/muted" android:background="@android:color/transparent" android:contentDescription="Descargar video" />
     </LinearLayout>
