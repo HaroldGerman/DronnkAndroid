@@ -243,7 +243,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (player.mediaItemCount == 0) stopSelf()
+        // Cerrar Dronnk desde la vista de apps recientes significa cerrar
+        // también la reproducción. Minimizar/bloquear pantalla no dispara esto.
+        runCatching {
+            player.pause()
+            player.clearMediaItems()
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
         super.onTaskRemoved(rootIntent)
     }
 
