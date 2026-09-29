@@ -255,6 +255,16 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // Si Android destruye el servicio (por ejemplo al cerrar Dronnk desde
+        // recientes), también debemos detener y liberar el ExoPlayer singleton.
+        runCatching {
+            player.pause()
+            player.clearMediaItems()
+        }
+
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        PlayerManager.release()
+
         serviceScope.cancel()
         session?.release()
         session = null
