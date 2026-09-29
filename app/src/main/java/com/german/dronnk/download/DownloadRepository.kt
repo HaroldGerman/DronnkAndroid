@@ -32,7 +32,12 @@ object DownloadRepository {
     suspend fun ensureLocalMp3(context: Context, song: Song): Result<Song> = withContext(Dispatchers.IO) {
         runCatching {
             findExistingAudio(context, song)?.let {
-                return@runCatching song.copy(isDownloaded = true, localPath = it.toString(), url = it.toString())
+                return@runCatching song.copy(
+                    isDownloaded = true,
+                    localPath = it.toString(),
+                    url = it.toString(),
+                    mediaType = "audio"
+                )
             }
 
             val source = requireNotNull(song.sourceUrl ?: song.url) { "La canción no tiene URL" }
@@ -183,37 +188,77 @@ object DownloadRepository {
     private fun findExistingAudio(context: Context, song: Song): Uri? {
         resolveSavedLink(context, "audio", song)?.let { return it }
 
-        val songId = song.id?.takeIf { it.isNotBlank() }
-        val title = safeName(song.titulo ?: return null)
-        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DISPLAY_NAME)
+        val stableId = stableSongId(song)
+        val expectedTitle = canonicalMediaTitle(song.titulo.orEmpty())
+
+        val projection = mutableListOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.DISPLAY_NAME
+        ).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(MediaStore.Audio.Media.RELATIVE_PATH)
+            }
+        }.toTypedArray()
+
+        val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ?"
+        } else null
+
+        val args = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            arrayOf("Music/Dronnk%")
+        } else null
 
         context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             projection,
-            null,
-            null,
+            selection,
+            args,
             "${MediaStore.Audio.Media.DATE_ADDED} DESC"
         )?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+
+            var bestLegacyUri: Uri? = null
+            var bestLegacyScore = 0.0
+
             while (cursor.moveToNext()) {
                 val displayName = cursor.getString(nameCol) ?: continue
-                val matchesId = songId != null && displayName.startsWith("${songId}__")
-                val matchesLegacyTitle = displayName.equals("$title.mp3", ignoreCase = true)
-                val matchesNormalizedTitle =
-                    canonicalMediaTitle(displayName.removeSuffix(".mp3").substringAfter("__")) ==
-                        canonicalMediaTitle(title)
+                if (!displayName.endsWith(".mp3", ignoreCase = true)) continue
 
-                if (matchesId || matchesLegacyTitle || matchesNormalizedTitle) {
-                    val uri = ContentUris.withAppendedId(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        cursor.getLong(idCol)
-                    )
+                val uri = ContentUris.withAppendedId(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    cursor.getLong(idCol)
+                )
+
+                // Nuevo formato: <songId>__<titulo>.mp3
+                if (displayName.startsWith("${stableId}__", ignoreCase = true)) {
                     saveMediaLink(context, "audio", song, uri)
                     return uri
                 }
+
+                // Compatibilidad con versiones antiguas sin ID.
+                if (expectedTitle.isNotBlank()) {
+                    val candidateTitle = canonicalMediaTitle(
+                        displayName
+                            .removeSuffix(".mp3")
+                            .substringAfter("__")
+                    )
+
+                    val score = titleSimilarity(expectedTitle, candidateTitle)
+                    if (score > bestLegacyScore) {
+                        bestLegacyScore = score
+                        bestLegacyUri = uri
+                    }
+                }
+            }
+
+            // Umbral alto para no relacionar por accidente canciones distintas.
+            if (bestLegacyUri != null && bestLegacyScore >= 0.82) {
+                saveMediaLink(context, "audio", song, bestLegacyUri!!)
+                return bestLegacyUri
             }
         }
+
         return null
     }
 
@@ -321,6 +366,24 @@ object DownloadRepository {
             .replace(Regex("[^a-z0-9 ]"), " ")
             .replace(Regex("""\s+"""), " ")
             .trim()
+
+    private fun titleSimilarity(a: String, b: String): Double {
+        if (a.isBlank() || b.isBlank()) return 0.0
+        if (a == b) return 1.0
+        if (a.contains(b) || b.contains(a)) {
+            val shorter = minOf(a.length, b.length).toDouble()
+            val longer = maxOf(a.length, b.length).toDouble()
+            return (shorter / longer).coerceIn(0.0, 1.0)
+        }
+
+        val aTokens = a.split(" ").filter { it.length > 1 }.toSet()
+        val bTokens = b.split(" ").filter { it.length > 1 }.toSet()
+        if (aTokens.isEmpty() || bTokens.isEmpty()) return 0.0
+
+        val intersection = aTokens.intersect(bTokens).size.toDouble()
+        val union = aTokens.union(bTokens).size.toDouble()
+        return if (union == 0.0) 0.0 else intersection / union
+    }
 
     private fun saveMedia(
         context: Context,
