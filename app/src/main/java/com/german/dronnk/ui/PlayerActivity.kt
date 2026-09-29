@@ -23,6 +23,7 @@ import com.german.dronnk.data.LibraryRepository
 import com.german.dronnk.download.DownloadRepository
 import com.german.dronnk.model.Song
 import com.german.dronnk.player.PlayerManager
+import com.german.dronnk.player.PlaybackService
 import kotlinx.coroutines.launch
 
 class PlayerActivity : AppCompatActivity() {
@@ -32,6 +33,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var total: TextView
     private lateinit var playPause: ImageButton
     private lateinit var favorite: ImageButton
+    private var boundSongKey: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,9 +46,7 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
 
-        bindMediaVisual(song)
-        findViewById<TextView>(R.id.playerTitle).text = song.titulo ?: "Canción"
-        findViewById<TextView>(R.id.playerArtist).text = song.canal ?: "Dronnk"
+        bindCurrentSong(song)
 
         seek = findViewById(R.id.playerSeek)
         current = findViewById(R.id.currentTime)
@@ -61,6 +61,12 @@ class PlayerActivity : AppCompatActivity() {
         }
         findViewById<ImageButton>(R.id.btnForward10).setOnClickListener {
             PlayerManager.player?.let { it.seekTo((it.currentPosition + 10_000L).coerceAtMost(it.duration.coerceAtLeast(0L))) }
+        }
+        findViewById<ImageButton>(R.id.btnNext).setOnClickListener {
+            startService(
+                Intent(this, PlaybackService::class.java)
+                    .setAction(PlaybackService.ACTION_NEXT)
+            )
         }
         favorite.setOnClickListener {
             LibraryRepository.toggleFavorite(this, song)
@@ -85,6 +91,14 @@ class PlayerActivity : AppCompatActivity() {
         updater.run()
     }
 
+    private fun bindCurrentSong(song: Song) {
+        boundSongKey = song.id ?: song.localPath ?: song.titulo
+        bindMediaVisual(song)
+        findViewById<TextView>(R.id.playerTitle).text = song.titulo ?: "Canción"
+        findViewById<TextView>(R.id.playerArtist).text = song.canal ?: "Dronnk"
+        refreshFavorite(song)
+    }
+
     private fun refreshFavorite(song: Song) {
         val active = LibraryRepository.isFavorite(this, song)
         favorite.setImageResource(if (active) R.drawable.ic_heart_solid else R.drawable.ic_heart_outline)
@@ -97,6 +111,10 @@ class PlayerActivity : AppCompatActivity() {
 
     private val updater = object : Runnable {
         override fun run() {
+            PlayerManager.currentSong?.let { active ->
+                val key = active.id ?: active.localPath ?: active.titulo
+                if (key != boundSongKey) bindCurrentSong(active)
+            }
             PlayerManager.player?.let { p ->
                 val duration = p.duration.takeIf { it > 0 } ?: 0L
                 val position = p.currentPosition.coerceAtLeast(0L)
