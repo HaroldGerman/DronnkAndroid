@@ -69,12 +69,20 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
         favorite.setOnClickListener {
-            LibraryRepository.toggleFavorite(this, song)
-            refreshFavorite(song)
+            PlayerManager.currentSong?.let { active ->
+                LibraryRepository.toggleFavorite(this, active)
+                refreshFavorite(active)
+            }
         }
-        findViewById<ImageButton>(R.id.btnShare).setOnClickListener { shareSong(song) }
-        findViewById<ImageButton>(R.id.btnVideo).setOnClickListener { downloadVideo(song) }
-        findViewById<ImageButton>(R.id.btnMore).setOnClickListener { shareSong(song) }
+        findViewById<ImageButton>(R.id.btnShare).setOnClickListener {
+            PlayerManager.currentSong?.let(::shareSong)
+        }
+        findViewById<ImageButton>(R.id.btnVideo).setOnClickListener {
+            PlayerManager.currentSong?.let(::downloadVideo)
+        }
+        findViewById<ImageButton>(R.id.btnMore).setOnClickListener {
+            PlayerManager.currentSong?.let(::shareSong)
+        }
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
