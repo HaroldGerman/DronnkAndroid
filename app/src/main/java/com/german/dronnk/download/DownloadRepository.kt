@@ -198,7 +198,7 @@ object DownloadRepository {
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
             while (cursor.moveToNext()) {
                 val displayName = cursor.getString(nameCol) ?: continue
-                val matchesId = songId != null && displayName.startsWith("$songId__")
+                val matchesId = songId != null && displayName.startsWith("${songId}__")
                 val matchesLegacyTitle = displayName.equals("$title.mp3", ignoreCase = true)
                 val matchesNormalizedTitle =
                     canonicalMediaTitle(displayName.removeSuffix(".mp3").substringAfter("__")) ==
@@ -248,7 +248,7 @@ object DownloadRepository {
             while (cursor.moveToNext()) {
                 val displayName = cursor.getString(nameCol) ?: continue
                 val baseName = displayName.removeSuffix(".mp4")
-                val matchesId = songId != null && displayName.startsWith("$songId__")
+                val matchesId = songId != null && displayName.startsWith("${songId}__")
                 val matchesLegacyTitle = displayName.equals("$title.mp4", ignoreCase = true)
                 val matchesNormalizedTitle =
                     canonicalMediaTitle(baseName.substringAfter("__")) ==
