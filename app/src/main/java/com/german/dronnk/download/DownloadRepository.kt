@@ -59,7 +59,8 @@ object DownloadRepository {
                 isDownloaded = true,
                 localPath = uri.toString(),
                 url = uri.toString(),
-                sourceUrl = song.sourceUrl ?: source
+                sourceUrl = song.sourceUrl ?: source,
+                mediaType = "audio"
             )
         }
     }
@@ -94,6 +95,34 @@ object DownloadRepository {
             showVideoFailed(context, song.titulo ?: "Video")
         }
     }
+
+    fun preferredLocalMedia(context: Context, song: Song): Song? {
+        findExistingVideo(context, song)?.let { uri ->
+            return song.copy(
+                isDownloaded = true,
+                localPath = uri.toString(),
+                url = uri.toString(),
+                mediaType = "video"
+            )
+        }
+        findExistingAudio(context, song)?.let { uri ->
+            return song.copy(
+                isDownloaded = true,
+                localPath = uri.toString(),
+                url = uri.toString(),
+                mediaType = "audio"
+            )
+        }
+        return null
+    }
+
+    fun asDownloadedVideo(song: Song, uri: Uri): Song =
+        song.copy(
+            isDownloaded = true,
+            localPath = uri.toString(),
+            url = uri.toString(),
+            mediaType = "video"
+        )
 
     fun downloadedAudio(context: Context): List<Song> {
         val result = mutableListOf<Song>()
@@ -160,6 +189,35 @@ object DownloadRepository {
             if (cursor.moveToFirst()) {
                 val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID))
                 return ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+            }
+        }
+        return null
+    }
+
+    private fun findExistingVideo(context: Context, song: Song): Uri? {
+        val title = safeName(song.titulo ?: return null)
+        val projection = arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME)
+        val selection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "${MediaStore.Video.Media.DISPLAY_NAME}=? AND ${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?"
+        } else {
+            "${MediaStore.Video.Media.DISPLAY_NAME}=?"
+        }
+        val args = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            arrayOf("$title.mp4", "Movies/Dronnk%")
+        } else {
+            arrayOf("$title.mp4")
+        }
+
+        context.contentResolver.query(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            args,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID))
+                return ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
             }
         }
         return null
