@@ -239,7 +239,7 @@ class MainActivity : AppCompatActivity() {
             adapter.submit(emptyList())
             showEmpty(
                 "Tu música empieza aquí",
-                "Busca una canción o artista. Al tocarla, Dronnk la descargará y reproducirá desde tu teléfono.",
+                "Busca una canción o artista. Dronnk reproduce archivos locales y contenido disponible; si una fuente externa no puede guardarse, podrás abrirla directamente.",
                 null
             )
         }
@@ -295,7 +295,7 @@ class MainActivity : AppCompatActivity() {
                 showMiniPlayer(local)
                 sectionTitle.text = "Reproduciendo desde el dispositivo"
             }.onFailure {
-                Toast.makeText(this@MainActivity, "No se pudo descargar el MP3: ${it.message}", Toast.LENGTH_LONG).show()
+                showSourceFallback(song, "Esta canción no está disponible para guardar en Dronnk.")
             }
         }
     }
@@ -366,9 +366,34 @@ class MainActivity : AppCompatActivity() {
                 }
                 .onFailure {
                     loading.visibility = View.GONE
-                    Toast.makeText(this@MainActivity, "No se pudo descargar el video: ${it.message}", Toast.LENGTH_LONG).show()
+                    showSourceFallback(song, "Este video no está disponible para guardar en Dronnk.")
                 }
         }
+    }
+
+    private fun showSourceFallback(song: Song, message: String) {
+        val source = sequenceOf(song.sourceUrl, song.url)
+            .filterNotNull()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("http://") || it.startsWith("https://") }
+
+        if (source == null) {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(song.titulo ?: "Fuente externa")
+            .setMessage("$message\n\nPuedes abrir la fuente original.")
+            .setPositiveButton("Abrir fuente") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(source)))
+                }.onFailure {
+                    Toast.makeText(this, "No se pudo abrir la fuente", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun showDownloads() {
