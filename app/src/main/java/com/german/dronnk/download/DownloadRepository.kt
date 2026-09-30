@@ -31,6 +31,15 @@ object DownloadRepository {
 
     suspend fun ensureLocalMp3(context: Context, song: Song): Result<Song> = withContext(Dispatchers.IO) {
         runCatching {
+            directLocalUri(context, song)?.let {
+                return@runCatching song.copy(
+                    isDownloaded = true,
+                    localPath = it.toString(),
+                    url = it.toString(),
+                    mediaType = song.mediaType ?: "audio"
+                )
+            }
+
             findExistingAudio(context, song)?.let {
                 return@runCatching song.copy(
                     isDownloaded = true,
@@ -40,7 +49,8 @@ object DownloadRepository {
                 )
             }
 
-            val source = requireNotNull(song.sourceUrl ?: song.url) { "La canción no tiene URL" }
+            val source = remoteSource(song)
+                ?: error("La canción no tiene una URL remota válida")
             val prepared = ApiClient.api.prepararMp3(source)
             require(prepared.status == "success" && !prepared.url.isNullOrBlank()) {
                 prepared.message ?: "No se pudo preparar el MP3"
@@ -75,8 +85,8 @@ object DownloadRepository {
     suspend fun downloadVideo(context: Context, song: Song): Result<Uri> = withContext(Dispatchers.IO) {
         runCatching {
             ensureDownloadChannel(context)
-            val source = requireNotNull(song.sourceUrl ?: song.url) { "La canción no tiene URL original" }
-            require(source.startsWith("http")) { "El video requiere la URL original" }
+            val source = remoteSource(song)
+                ?: error("El video requiere una URL original válida")
 
             showVideoProgress(context, song.titulo ?: "Video", 0, true)
             val prepared = ApiClient.api.prepararVideo(source)
@@ -105,6 +115,15 @@ object DownloadRepository {
     }
 
     fun preferredLocalMedia(context: Context, song: Song): Song? {
+        directLocalUri(context, song)?.let { uri ->
+            return song.copy(
+                isDownloaded = true,
+                localPath = uri.toString(),
+                url = uri.toString(),
+                mediaType = song.mediaType ?: "audio"
+            )
+        }
+
         findExistingVideo(context, song)?.let { uri ->
             return song.copy(
                 isDownloaded = true,
@@ -175,6 +194,27 @@ object DownloadRepository {
         }
         return result
     }
+
+    private fun directLocalUri(context: Context, song: Song): Uri? {
+        val candidate = sequenceOf(song.localPath, song.url)
+            .filterNotNull()
+            .firstOrNull { value ->
+                value.startsWith("content://") || value.startsWith("file://")
+            } ?: return null
+
+        val uri = Uri.parse(candidate)
+        val readable = runCatching {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+        }.getOrDefault(false)
+
+        return uri.takeIf { readable }
+    }
+
+    private fun remoteSource(song: Song): String? =
+        sequenceOf(song.sourceUrl, song.url)
+            .filterNotNull()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("http://") || it.startsWith("https://") }
 
     private fun formatDuration(ms: Long): String {
         if (ms <= 0) return ""
