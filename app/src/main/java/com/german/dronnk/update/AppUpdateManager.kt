@@ -16,7 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 
-data class DronnkRelease(
+data class JarvisRelease(
     val versionName: String,
     val downloadUrl: String,
     val fileName: String
@@ -25,18 +25,18 @@ data class DronnkRelease(
 object AppUpdateManager {
     private const val RELEASE_API =
         "https://api.github.com/repos/HaroldGerman/DronnkAndroid/releases/latest"
-    const val PREFS = "dronnk_updates"
+    const val PREFS = "jarvis_updates"
     const val KEY_DOWNLOAD_ID = "download_id"
 
     private val http = OkHttpClient()
 
-    suspend fun checkLatest(context: Context): Result<DronnkRelease?> =
+    suspend fun checkLatest(context: Context): Result<JarvisRelease?> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
                     .url(RELEASE_API)
                     .header("Accept", "application/vnd.github+json")
-                    .header("User-Agent", "Dronnk-Android")
+                    .header("User-Agent", "Jarvis-Android")
                     .build()
 
                 http.newCall(request).execute().use { response ->
@@ -76,22 +76,22 @@ object AppUpdateManager {
                         "La versión publicada no contiene un APK"
                     }
 
-                    DronnkRelease(
+                    JarvisRelease(
                         versionName = tag,
                         downloadUrl = apkUrl!!,
-                        fileName = apkName ?: "Dronnk-$tag.apk"
+                        fileName = apkName ?: "Jarvis-$tag.apk"
                     )
                 }
             }
         }
 
-    fun startDownload(activity: Activity, release: DronnkRelease) {
+    fun startDownload(activity: Activity, release: JarvisRelease) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !activity.packageManager.canRequestPackageInstalls()
         ) {
             Toast.makeText(
                 activity,
-                "Activa “Instalar apps desconocidas” para Dronnk. La descarga continuará.",
+                "Activa “Instalar apps desconocidas” para Jarvis. La descarga continuará.",
                 Toast.LENGTH_LONG
             ).show()
 
@@ -104,8 +104,8 @@ object AppUpdateManager {
         }
 
         val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
-            .setTitle("Actualizando Dronnk")
-            .setDescription("Dronnk ${release.versionName}")
+            .setTitle("Actualizando Jarvis")
+            .setDescription("Jarvis ${release.versionName}")
             .setMimeType("application/vnd.android.package-archive")
             .setNotificationVisibility(
                 DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
@@ -125,7 +125,7 @@ object AppUpdateManager {
 
         Toast.makeText(
             activity,
-            "Descargando Dronnk ${release.versionName}",
+            "Descargando Jarvis ${release.versionName}",
             Toast.LENGTH_SHORT
         ).show()
     }
