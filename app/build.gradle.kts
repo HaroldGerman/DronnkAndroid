@@ -1,5 +1,10 @@
 import java.util.Properties
 
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use(::load)
@@ -7,11 +12,6 @@ val localProperties = Properties().apply {
 val youtubeApiKey = localProperties.getProperty("YOUTUBE_API_KEY", "")
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
-
-plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-}
 
 android {
     namespace = "com.german.dronnk"
