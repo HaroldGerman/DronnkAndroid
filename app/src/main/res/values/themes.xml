@@ -1,10 +1,12 @@
 <resources>
-    <style name="Theme.Jarvis" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.Dronnk" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowBackground">@color/black</item>
-        <item name="colorPrimary">@color/primary</item>
-        <item name="android:navigationBarColor">@color/black</item>
-        <item name="android:statusBarColor">@color/black</item>
+        <item name="android:windowBackground">#070506</item>
+        <item name="colorPrimary">#D72638</item>
+        <item name="colorPrimaryVariant">#8B0D1B</item>
+        <item name="colorSecondary">#FF465A</item>
+        <item name="android:navigationBarColor">#050405</item>
+        <item name="android:statusBarColor">#050405</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>
