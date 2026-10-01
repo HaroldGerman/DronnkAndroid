@@ -9,9 +9,13 @@ val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use(::load)
 }
-val youtubeApiKey = localProperties.getProperty("YOUTUBE_API_KEY", "")
+
+fun escapedLocal(name: String): String = localProperties.getProperty(name, "")
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
+
+val youtubeApiKey = escapedLocal("YOUTUBE_API_KEY")
+val geminiApiKey = escapedLocal("GEMINI_API_KEY")
 
 android {
     namespace = "com.german.dronnk"
@@ -21,9 +25,10 @@ android {
         applicationId = "com.german.dronnk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.0.9"
+        versionCode = 24
+        versionName = "2.1.0"
         buildConfigField("String", "YOUTUBE_API_KEY", "\"$youtubeApiKey\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
     }
 
     buildFeatures {
