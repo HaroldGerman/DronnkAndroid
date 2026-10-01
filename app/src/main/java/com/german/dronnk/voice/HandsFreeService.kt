@@ -51,29 +51,37 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         const val KEY_ENABLED = "enabled"
         private const val CHANNEL_ID = "dronnk_hands_free"
         private const val NOTIFICATION_ID = 2101
-        private const val HOTWORD_RETRY_MS = 12_000L
         private const val COMMAND_TIMEOUT_MS = 8_000L
-        private const val COMMAND_RETRY_MS = 1_200L
         private const val TTS_UTTERANCE_ID = "hands-free-response"
+        private const val MONITOR_RESUME_MS = 700L
     }
 
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var listening = false
     private var awaitingCommand = false
-    private var wakeWordSeen = false
     private var isSpeaking = false
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val youtubeSearch by lazy { YouTubeSearchClient(this) }
+    private val voiceMonitor by lazy {
+        VoiceActivityMonitor(this) {
+            handler.post {
+                if (isEnabled() && !isSpeaking && !listening) {
+                    handler.postDelayed(::startRecognitionFromVoiceActivity, 300L)
+                }
+            }
+        }
+    }
 
     private val commandTimeout = Runnable {
         if (!isEnabled() || !awaitingCommand) return@Runnable
         awaitingCommand = false
-        wakeWordSeen = false
-        updateNotification("Esperando “Dronnk”…")
-        restartHotword(HOTWORD_RETRY_MS)
+        runCatching { recognizer?.cancel() }
+        listening = false
+        updateNotification("Esperando voz…")
+        handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
     }
 
     override fun onCreate() {
@@ -94,9 +102,9 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         }
 
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
-        startAsForeground("Esperando “Dronnk”…")
+        startAsForeground("Manos libres activo · esperando voz")
         ensureRecognizer()
-        handler.postDelayed(::startHotwordListening, 500L)
+        handler.postDelayed(::startVoiceMonitoring, 350L)
         return START_STICKY
     }
 
@@ -150,7 +158,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
                     listening = true
-                    updateNotification(if (awaitingCommand) "Te escucho… di la orden" else "Esperando “Dronnk”…")
+                    updateNotification(if (awaitingCommand) "Dronnk activado · di tu orden" else "Escuchando…")
                 }
 
                 override fun onBeginningOfSpeech() = Unit
@@ -162,17 +170,9 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
                     listening = false
                     handler.removeCallbacks(commandTimeout)
                     if (!isEnabled() || isSpeaking) return
-
-                    if (awaitingCommand) {
-                        awaitingCommand = false
-                        wakeWordSeen = false
-                        updateNotification("No escuché la orden. Esperando “Dronnk”…")
-                        restartHotword(COMMAND_RETRY_MS)
-                    } else {
-                        // No hacemos un bucle rápido. En Samsung cada nueva sesión puede producir
-                        // un tono del proveedor de reconocimiento.
-                        restartHotword(HOTWORD_RETRY_MS)
-                    }
+                    awaitingCommand = false
+                    updateNotification("Manos libres activo · esperando voz")
+                    handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
                 }
 
                 override fun onResults(results: Bundle?) {
@@ -187,13 +187,11 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
                         .filter(String::isNotBlank)
 
                     if (candidates.isEmpty()) {
-                        if (awaitingCommand) {
-                            awaitingCommand = false
-                            restartHotword(COMMAND_RETRY_MS)
-                        } else restartHotword(HOTWORD_RETRY_MS)
-                        return
+                        awaitingCommand = false
+                        handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+                    } else {
+                        processRecognitionCandidates(candidates)
                     }
-                    processRecognitionCandidates(candidates)
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
@@ -202,11 +200,8 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
                         ?.firstOrNull()
                         ?.trim()
                         .orEmpty()
-                    if (partial.isBlank()) return
-
-                    if (!awaitingCommand && findWakeWord(partial) != null) {
-                        wakeWordSeen = true
-                        updateNotification("Te escucho… termina la orden")
+                    if (partial.isNotBlank() && findWakeWord(partial) != null) {
+                        updateNotification("Dronnk detectado · termina la orden")
                     }
                 }
 
@@ -221,52 +216,50 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-PE")
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-        // No se fuerza EXTRA_PREFER_OFFLINE: en algunos Samsung deja al servicio sin resultados.
-        if (commandMode) {
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_000L)
-        }
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 1_500L else 1_900L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 1_000L else 1_300L)
     }
 
-    private fun startHotwordListening() {
-        if (!isEnabled() || listening || isSpeaking) return
-        ensureRecognizer()
-        val engine = recognizer ?: return
-        awaitingCommand = false
-        wakeWordSeen = false
-        handler.removeCallbacks(commandTimeout)
-        updateNotification("Esperando “Dronnk”…")
+    private fun startVoiceMonitoring() {
+        if (!isEnabled() || listening || isSpeaking || awaitingCommand) return
+        updateNotification("Manos libres activo · esperando voz")
+        voiceMonitor.start()
+    }
 
+    private fun startRecognitionFromVoiceActivity() {
+        if (!isEnabled() || listening || isSpeaking) return
+        voiceMonitor.stop()
+        ensureRecognizer()
+        val engine = recognizer ?: run {
+            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            return
+        }
+        awaitingCommand = false
+        updateNotification("Escuchando…")
         runCatching { engine.startListening(recognitionIntent(false)) }
-            .onFailure { restartHotword(HOTWORD_RETRY_MS) }
+            .onFailure { handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS) }
     }
 
     private fun startCommandListening() {
         if (!isEnabled() || isSpeaking) return
+        voiceMonitor.stop()
         handler.removeCallbacks(commandTimeout)
         runCatching { recognizer?.cancel() }
         listening = false
         awaitingCommand = true
-        wakeWordSeen = true
-        updateNotification("Dronnk activado · Di tu orden")
+        updateNotification("Dronnk activado · di tu orden")
 
         handler.postDelayed({
             if (!isEnabled() || !awaitingCommand || isSpeaking) return@postDelayed
+            ensureRecognizer()
             val engine = recognizer ?: return@postDelayed
             runCatching { engine.startListening(recognitionIntent(true)) }
                 .onSuccess { handler.postDelayed(commandTimeout, COMMAND_TIMEOUT_MS) }
                 .onFailure {
                     awaitingCommand = false
-                    restartHotword(COMMAND_RETRY_MS)
+                    handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
                 }
-        }, 500L)
-    }
-
-    private fun restartHotword(delay: Long) {
-        handler.removeCallbacks(commandTimeout)
-        runCatching { recognizer?.cancel() }
-        listening = false
-        handler.postDelayed({ if (isEnabled() && !isSpeaking) startHotwordListening() }, delay)
+        }, 350L)
     }
 
     private fun findWakeWord(text: String): IntRange? {
@@ -285,22 +278,32 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
                 .map(::stripWakeWordPrefix)
                 .firstOrNull { looksLikeSupportedCommand(it) }
                 ?: stripWakeWordPrefix(candidates.first())
-            if (command.isBlank()) restartHotword(COMMAND_RETRY_MS) else executeCommand(command)
+
+            if (command.isBlank()) handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            else executeCommand(command)
             return
         }
 
         val withWakeWord = candidates.firstOrNull { findWakeWord(it) != null }
-        if (withWakeWord == null) {
-            if (wakeWordSeen) startCommandListening() else restartHotword(HOTWORD_RETRY_MS)
+        if (withWakeWord != null) {
+            val match = findWakeWord(withWakeWord) ?: run {
+                handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+                return
+            }
+            val rest = withWakeWord.substring(match.last + 1).trim(' ', ',', '.', ':', ';', '-')
+            if (rest.isBlank()) startCommandListening() else executeCommand(rest)
             return
         }
 
-        val match = findWakeWord(withWakeWord) ?: run {
-            restartHotword(HOTWORD_RETRY_MS)
-            return
+        // El VAD puede activar el reconocedor después de que la primera sílaba ya haya sonado.
+        // Si Android pierde "Dronnk" pero entiende una orden válida, la ejecutamos igualmente.
+        val directCommand = candidates.firstOrNull { looksLikeSupportedCommand(it) }
+        if (directCommand != null) {
+            executeCommand(directCommand)
+        } else {
+            updateNotification("Manos libres activo · esperando voz")
+            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
         }
-        val rest = withWakeWord.substring(match.last + 1).trim(' ', ',', '.', ':', ';', '-')
-        if (rest.isBlank()) startCommandListening() else executeCommand(rest)
     }
 
     private fun stripWakeWordPrefix(text: String): String {
@@ -310,7 +313,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun looksLikeSupportedCommand(text: String): Boolean {
-        val q = text.lowercase(Locale.getDefault())
+        val q = text.lowercase(Locale.getDefault()).trim()
         return q.contains("linterna") || q.contains("volumen") || q.startsWith("llama") ||
             q.contains("whatsapp") || Regex("\\bwsp\\b").containsMatchIn(q) ||
             q.startsWith("pon ") || q.startsWith("reproduce") || q.startsWith("abre ") ||
@@ -322,9 +325,9 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     private fun executeCommand(command: String) {
         awaitingCommand = false
         handler.removeCallbacks(commandTimeout)
-        updateNotification("Procesando: $command")
         val cleanCommand = stripWakeWordPrefix(command)
         val q = cleanCommand.lowercase(Locale.getDefault()).trim()
+        updateNotification("Procesando: $cleanCommand")
 
         when {
             (q.contains("apaga") || q.contains("desactiva")) && q.contains("linterna") -> setTorch(false)
@@ -346,7 +349,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
                 speakAndResume("Tienes ${manager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
             }
             q.contains("detén dronnk") || q.contains("deten dronnk") || q.contains("desactiva manos libres") -> disableAndStop()
-            else -> speakAndResume("No entendí esa orden. Dila de nuevo después de decir Dronnk.")
+            else -> handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
         }
     }
 
@@ -517,6 +520,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun openExternal(intent: Intent, response: String) {
+        voiceMonitor.stop()
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
         val assistantComponent = ComponentName(this, DronnkVoiceInteractionService::class.java)
@@ -560,25 +564,25 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun speakAndResume(message: String) {
+        voiceMonitor.stop()
         handler.removeCallbacks(commandTimeout)
         runCatching { recognizer?.cancel() }
         listening = false
         awaitingCommand = false
-        wakeWordSeen = false
         isSpeaking = true
         updateNotification(message)
 
         val engine = tts
         if (engine == null) {
             isSpeaking = false
-            restartHotword(COMMAND_RETRY_MS)
+            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
             return
         }
 
         val result = engine.speak(message, TextToSpeech.QUEUE_FLUSH, null, TTS_UTTERANCE_ID)
         if (result == TextToSpeech.ERROR) {
             isSpeaking = false
-            restartHotword(COMMAND_RETRY_MS)
+            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
         }
     }
 
@@ -588,6 +592,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     private fun disableAndStop() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
         handler.removeCallbacksAndMessages(null)
+        voiceMonitor.stop()
         runCatching { recognizer?.cancel() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -617,26 +622,27 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             override fun onDone(utteranceId: String?) {
                 if (utteranceId != TTS_UTTERANCE_ID) return
                 isSpeaking = false
-                handler.postDelayed({ if (isEnabled()) startHotwordListening() }, 700L)
+                handler.postDelayed({ if (isEnabled()) startVoiceMonitoring() }, MONITOR_RESUME_MS)
             }
 
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
                 if (utteranceId != TTS_UTTERANCE_ID) return
                 isSpeaking = false
-                restartHotword(COMMAND_RETRY_MS)
+                handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
             }
 
             override fun onError(utteranceId: String?, errorCode: Int) {
                 if (utteranceId != TTS_UTTERANCE_ID) return
                 isSpeaking = false
-                restartHotword(COMMAND_RETRY_MS)
+                handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
             }
         })
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        voiceMonitor.stop()
         runCatching { recognizer?.cancel() }
         recognizer?.destroy()
         recognizer = null
