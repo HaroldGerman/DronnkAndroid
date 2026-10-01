@@ -14,10 +14,10 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/dronnk_app_icon"
-        android:roundIcon="@drawable/dronnk_app_icon"
+        android:icon="@drawable/jarvis_app_icon"
+        android:roundIcon="@drawable/jarvis_app_icon"
         android:label="Jarvis"
-        android:theme="@style/Theme.Dronnk">
+        android:theme="@style/Theme.Jarvis">
         <activity
             android:name=".ui.MainActivity"
             android:exported="true">
