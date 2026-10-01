@@ -24,6 +24,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -65,6 +66,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var listening = false
     private var pendingContactCommand: String? = null
+    private var pendingDirectCall: Pair<String, String>? = null
     private var activeTab = "Inicio"
     private val conversationLog = mutableListOf<Pair<String, String>>()
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -90,6 +92,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         pendingContactCommand = null
         if (granted && command != null) execute(command, appendUser = false)
         else if (!granted) reply("Necesito permiso de contactos para buscar personas por nombre.")
+    }
+
+    private val callPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val pending = pendingDirectCall
+        pendingDirectCall = null
+        if (granted && pending != null) placeCall(pending.first, pending.second)
+        else if (!granted) reply("Necesito permiso de teléfono para iniciar llamadas directamente.")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -210,9 +219,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         contentHost.addView(listenButton, LinearLayout.LayoutParams(-1, dp(62)).apply { setMargins(dp(12), 0, dp(12), dp(14)) })
         contentHost.addView(TextView(this).apply {
             text = if (isHandsFreeEnabled()) {
-                "Manos libres activo. Con la pantalla bloqueada di “Dronnk” y luego tu orden."
+                "Manos libres activo. Di “Dronnk” y luego tu orden."
             } else {
-                "Prueba: “abre WhatsApp y entra al chat de Mirella”, “pon Dash Berlin en Spotify”, “llama a mamá” o activa Manos libres en Ajustes."
+                "Prueba: “llama a mamá”, “pausa la música”, “abre WhatsApp” o activa Manos libres en Ajustes."
             }
             textSize = 13f
             gravity = Gravity.CENTER
@@ -231,6 +240,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             "💬 WhatsApp" to "abre WhatsApp",
             "☎ Llamadas" to "llama a mamá",
             "🎵 Spotify" to "pon Dash Berlin en Spotify",
+            "⏸ Pausar" to "pausa la música",
+            "⏭ Siguiente" to "siguiente canción",
             "📷 Cámara" to "abre cámara",
             "🔦 Linterna" to "enciende la linterna",
             "🔊 Volumen" to "sube el volumen",
@@ -306,7 +317,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (handsFreeEnabled) "Activo · di “Dronnk” incluso con la pantalla bloqueada" else "Desactivado · toca para activar"
         ) { toggleHandsFreeMode() }
         addSetting("Voz y lenguaje", "Español (Perú)") { launch(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS), "Abriendo ajustes de voz.") }
-        addSetting("Permisos", "Micrófono, cámara y contactos") {
+        addSetting("Permisos", "Micrófono, cámara, contactos y llamadas") {
             launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")), "Abriendo permisos de Dronnk.")
         }
         addSetting("Apariencia", "Negro + escarlata") { reply("El tema escarlata de Dronnk está activo.", false) }
@@ -442,6 +453,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             q.contains("sube el volumen") -> changeVolume(AudioManager.ADJUST_RAISE, "Subiendo el volumen.")
             q.contains("baja el volumen") -> changeVolume(AudioManager.ADJUST_LOWER, "Bajando el volumen.")
             q.contains("silencia") || q.contains("silencio") -> changeVolume(AudioManager.ADJUST_MUTE, "Silenciando el audio multimedia.")
+            q == "pausa" || q.contains("pausa la música") || q.contains("pausa la musica") -> mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE, "Pausando reproducción.")
+            q == "reanuda" || q == "continúa" || q == "continua" || q.contains("reanuda la música") || q.contains("continúa la música") || q.contains("continua la musica") -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY, "Reanudando reproducción.")
+            q.contains("siguiente canción") || q.contains("siguiente cancion") || q == "siguiente" -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, "Pasando a la siguiente canción.")
+            q.contains("canción anterior") || q.contains("cancion anterior") || q == "anterior" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Volviendo a la canción anterior.")
             q.contains("configuración") || q.contains("configuracion") || q == "ajustes" -> launch(Intent(Settings.ACTION_SETTINGS), "Abriendo configuración.")
             q.contains("wifi") || q.contains("wi-fi") -> launch(Intent(Settings.ACTION_WIFI_SETTINGS), "Abriendo Wi-Fi.")
             q.contains("bluetooth") -> launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS), "Abriendo Bluetooth.")
@@ -456,7 +471,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             q.contains("actualización") || q.contains("actualizacion") || q == "actualiza" -> checkForUpdates(true)
             q == "abre wsp" || q == "abre whatsapp" || q == "abrir whatsapp" -> openPackage("com.whatsapp", "WhatsApp")
             q.startsWith("abre ") || q.startsWith("abrir ") -> openApp(command.substringAfter(" ").trim())
-            else -> reply("No entendí esa orden todavía. Prueba con abrir una app, entrar a un chat de WhatsApp, llamar a un contacto, reproducir algo en Spotify, navegar, usar la linterna o crear una alarma.")
+            else -> reply("No entendí esa orden todavía. Puedo abrir apps, llamar directamente, controlar reproducción, entrar a chats, usar linterna, volumen, navegación y alarmas.")
         }
     }
 
@@ -507,14 +522,32 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val target = command.substringAfter(" a ").trim()
         val directNumber = target.filter { it.isDigit() || it == '+' }
         if (directNumber.length >= 5 && directNumber.length >= target.length - 2) {
-            launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$directNumber")), "Preparando llamada.")
+            requestDirectCall(directNumber, directNumber)
             return
         }
         withContactPermission(command) {
             val contact = findContact(target)
             if (contact == null) reply("No encontré a $target en tus contactos.")
-            else launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(contact.second)}")), "Preparando llamada a ${contact.first}.")
+            else requestDirectCall(contact.second, contact.first)
         }
+    }
+
+    private fun requestDirectCall(number: String, label: String) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+            placeCall(number, label)
+        } else {
+            pendingDirectCall = number to label
+            callPermission.launch(Manifest.permission.CALL_PHONE)
+        }
+    }
+
+    private fun placeCall(number: String, label: String) {
+        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(number)}"))
+        if (canHandle(intent)) {
+            reply("Llamando a $label.")
+            runCatching { startActivity(intent) }
+                .onFailure { reply("No pude iniciar la llamada.") }
+        } else reply("No encontré una aplicación de llamadas compatible.")
     }
 
     private fun prepareSms(command: String) {
@@ -570,33 +603,37 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             .trim()
 
         when (provider) {
-            "spotify" -> playOnSpotify(query)
+            "spotify" -> openSpotifySearch(query)
             "youtube_music" -> {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")).setPackage("com.google.android.apps.youtube.music")
-                if (canHandle(intent)) launch(intent, "Buscando $query en YouTube Music.")
-                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")), "Buscando $query en YouTube Music.")
+                if (canHandle(intent)) launch(intent, "Abriendo la búsqueda de $query en YouTube Music.")
+                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")), "Abriendo la búsqueda de $query en YouTube Music.")
             }
             else -> {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")).setPackage("com.google.android.youtube")
-                if (canHandle(intent)) launch(intent, "Buscando $query en YouTube.")
-                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")), "Buscando $query en YouTube.")
+                if (canHandle(intent)) launch(intent, "Abriendo la búsqueda de $query en YouTube.")
+                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")), "Abriendo la búsqueda de $query en YouTube.")
             }
         }
     }
 
-    private fun playOnSpotify(query: String) {
+    private fun openSpotifySearch(query: String) {
         val clean = query.ifBlank { "música" }
-        val playIntent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
-            setPackage("com.spotify.music")
-            putExtra(SearchManager.QUERY, clean)
-        }
-        if (canHandle(playIntent)) {
-            launch(playIntent, "Reproduciendo $clean en Spotify.")
-            return
-        }
         val searchIntent = Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:${Uri.encode(clean)}")).setPackage("com.spotify.music")
-        if (canHandle(searchIntent)) launch(searchIntent, "Spotify no aceptó reproducción directa; abriendo la búsqueda de $clean.")
-        else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/${Uri.encode(clean)}")), "Abriendo Spotify para buscar $clean.")
+        if (canHandle(searchIntent)) {
+            launch(searchIntent, "Abriendo la búsqueda de $clean en Spotify. La reproducción automática se activará cuando conectemos Spotify Premium.")
+        } else {
+            launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/${Uri.encode(clean)}")), "Abriendo Spotify para buscar $clean.")
+        }
+    }
+
+    private fun mediaKey(keyCode: Int, message: String) {
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        runCatching {
+            audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        }.onSuccess { reply(message) }
+            .onFailure { reply("No pude controlar la reproducción activa.") }
     }
 
     private fun navigate(command: String) {
