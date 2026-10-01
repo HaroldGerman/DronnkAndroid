@@ -32,6 +32,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.german.dronnk.R
+import com.german.dronnk.ai.DronnkBrain
 import com.german.dronnk.ui.MainActivity
 import com.german.dronnk.youtube.YouTubeSearchClient
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +66,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val youtubeSearch by lazy { YouTubeSearchClient(this) }
+    private val brain by lazy { DronnkBrain() }
     private val voiceMonitor by lazy {
         VoiceActivityMonitor(this) {
             handler.post {
@@ -80,7 +82,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         awaitingCommand = false
         runCatching { recognizer?.cancel() }
         listening = false
-        updateNotification("Esperando voz…")
+        updateNotification("Manos libres activo · esperando voz")
         handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
     }
 
@@ -295,15 +297,9 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             return
         }
 
-        // El VAD puede activar el reconocedor después de que la primera sílaba ya haya sonado.
-        // Si Android pierde "Dronnk" pero entiende una orden válida, la ejecutamos igualmente.
         val directCommand = candidates.firstOrNull { looksLikeSupportedCommand(it) }
-        if (directCommand != null) {
-            executeCommand(directCommand)
-        } else {
-            updateNotification("Manos libres activo · esperando voz")
-            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-        }
+        if (directCommand != null) executeCommand(directCommand)
+        else handleIntelligentCommand(candidates.first())
     }
 
     private fun stripWakeWordPrefix(text: String): String {
@@ -349,7 +345,53 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
                 speakAndResume("Tienes ${manager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
             }
             q.contains("detén dronnk") || q.contains("deten dronnk") || q.contains("desactiva manos libres") -> disableAndStop()
-            else -> handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            else -> handleIntelligentCommand(cleanCommand)
+        }
+    }
+
+    private fun handleIntelligentCommand(text: String) {
+        if (!brain.isConfigured()) {
+            updateNotification("IA lista para configurar · esperando voz")
+            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            return
+        }
+
+        voiceMonitor.stop()
+        updateNotification("Pensando…")
+        serviceScope.launch {
+            val result = withContext(Dispatchers.IO) { brain.interpret(text) }
+            result.onSuccess(::executeBrainDecision)
+                .onFailure {
+                    updateNotification("IA no disponible · esperando voz")
+                    handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+                }
+        }
+    }
+
+    private fun executeBrainDecision(decision: DronnkBrain.Decision) {
+        when (decision.action) {
+            "OPEN_APP" -> openApp(decision.value)
+            "CALL_CONTACT" -> callContact(decision.value)
+            "WHATSAPP_CHAT" -> openWhatsAppChat("chat de ${decision.value}")
+            "PLAY_YOUTUBE" -> playYouTubeVideo(decision.value)
+            "SPOTIFY_SEARCH" -> openExternal(
+                Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:${Uri.encode(decision.value)}")).setPackage("com.spotify.music"),
+                decision.reply.ifBlank { "Abriendo ${decision.value} en Spotify." }
+            )
+            "TORCH_ON" -> setTorch(true)
+            "TORCH_OFF" -> setTorch(false)
+            "MEDIA_PAUSE" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE, decision.reply.ifBlank { "Pausando reproducción." })
+            "MEDIA_PLAY" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY, decision.reply.ifBlank { "Reanudando reproducción." })
+            "MEDIA_NEXT" -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, decision.reply.ifBlank { "Siguiente." })
+            "MEDIA_PREVIOUS" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, decision.reply.ifBlank { "Anterior." })
+            "BATTERY" -> {
+                val manager = getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
+                speakAndResume("Tienes ${manager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
+            }
+            else -> {
+                if (decision.reply.isNotBlank()) speakAndResume(decision.reply)
+                else handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            }
         }
     }
 
