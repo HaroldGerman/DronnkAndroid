@@ -1,658 +1,724 @@
 package com.german.dronnk.ui
 
 import android.Manifest
+import android.app.AlertDialog
+import android.app.SearchManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.View
-import android.view.Gravity
-import android.view.inputmethod.EditorInfo
-import android.widget.EditText
-import android.widget.ArrayAdapter
-import android.widget.AutoCompleteTextView
-import android.widget.ImageButton
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
-import android.widget.Toast
-import android.text.Editable
-import android.text.TextWatcher
-import android.content.ClipData
+import android.graphics.drawable.GradientDrawable
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.net.Uri
-import androidx.appcompat.app.AlertDialog
+import android.os.BatteryManager
+import android.os.Bundle
+import android.provider.AlarmClock
+import android.provider.CalendarContract
+import android.provider.ContactsContract
+import android.provider.MediaStore
+import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.view.Gravity
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
-import coil.load
-import com.german.dronnk.R
 import com.german.dronnk.BuildConfig
-import com.german.dronnk.data.LibraryRepository
-import com.german.dronnk.download.DownloadRepository
-import com.german.dronnk.model.Song
-import com.german.dronnk.network.ApiClient
-import com.german.dronnk.player.PlayerManager
 import com.german.dronnk.update.AppUpdateManager
-import com.google.android.material.bottomsheet.BottomSheetDialog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class MainActivity : AppCompatActivity() {
-    private lateinit var adapter: SongAdapter
-    private lateinit var loading: ProgressBar
-    private lateinit var miniPlayer: LinearLayout
-    private lateinit var miniTitle: TextView
-    private lateinit var miniArtist: TextView
-    private lateinit var miniCover: ImageView
-    private lateinit var miniPlay: ImageButton
-    private lateinit var songList: RecyclerView
-    private lateinit var searchInput: AutoCompleteTextView
-    private lateinit var searchBox: View
-    private lateinit var genreScroll: View
-    private lateinit var screenTitle: TextView
-    private lateinit var sectionTitle: TextView
-    private lateinit var emptyPanel: View
-    private lateinit var emptyTitle: TextView
-    private lateinit var emptyText: TextView
-    private lateinit var emptyAction: TextView
-    private lateinit var playlistListContainer: LinearLayout
-    private val suggestionHandler = Handler(Looper.getMainLooper())
-    private var suggestionRunnable: Runnable? = null
-    private var suggestionSongs: List<Song> = emptyList()
-    private var selectingSuggestion = false
+class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
+
+    private val bg = Color.rgb(7, 5, 6)
+    private val surface = Color.rgb(20, 14, 16)
+    private val surface2 = Color.rgb(34, 18, 22)
+    private val scarlet = Color.rgb(215, 38, 56)
+    private val scarletSoft = Color.rgb(255, 70, 90)
+    private val muted = Color.rgb(180, 163, 168)
+
+    private lateinit var contentHost: LinearLayout
+    private var statusView: TextView? = null
+    private var conversationView: TextView? = null
+    private var inputView: EditText? = null
+    private var listenButton: Button? = null
+
+    private var recognizer: SpeechRecognizer? = null
+    private var tts: TextToSpeech? = null
+    private var listening = false
+    private var pendingContactCommand: String? = null
+    private var activeTab = "Inicio"
+    private val conversationLog = mutableListOf<Pair<String, String>>()
+    private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private val microphonePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startListening()
+        else reply("Necesito permiso de micrófono para escucharte. También puedes escribirme.")
+    }
+
+    private val cameraPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) setTorch(true)
+        else reply("Necesito permiso de cámara para controlar la linterna.")
+    }
+
+    private val contactsPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val command = pendingContactCommand
+        pendingContactCommand = null
+        if (granted && command != null) execute(command, appendUser = false)
+        else if (!granted) reply("Necesito permiso de contactos para buscar personas por nombre.")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        applySystemInsets()
-
-        requestNotificationPermissionIfNeeded()
-        bindViews()
-        setupList()
-        setupSearch()
-        setupGenres()
-        setupNavigation()
-        setupMiniPlayer()
-        showSearchHome()
+        tts = TextToSpeech(this, this)
+        createShell()
+        configureSpeechRecognition()
+        showHome()
+        reply("Dronnk en línea. Dime qué necesitas.", speak = false)
+        checkForUpdates(showIfCurrent = false)
     }
 
-    private fun bindViews() {
-        loading = findViewById(R.id.loading)
-        miniPlayer = findViewById(R.id.miniPlayer)
-        miniTitle = findViewById(R.id.miniTitle)
-        miniArtist = findViewById(R.id.miniArtist)
-        miniCover = findViewById(R.id.miniCover)
-        miniPlay = findViewById(R.id.miniPlay)
-        songList = findViewById(R.id.songList)
-        searchInput = findViewById(R.id.searchInput)
-        searchBox = findViewById(R.id.searchBox)
-        genreScroll = findViewById(R.id.genreScroll)
-        screenTitle = findViewById(R.id.screenTitle)
-        sectionTitle = findViewById(R.id.sectionTitle)
-        emptyPanel = findViewById(R.id.emptyPanel)
-        emptyTitle = findViewById(R.id.emptyTitle)
-        emptyText = findViewById(R.id.emptyText)
-        emptyAction = findViewById(R.id.emptyAction)
-        playlistListContainer = findViewById(R.id.playlistListContainer)
-    }
-
-    private fun setupList() {
-        adapter = SongAdapter(
-            onClick = ::downloadThenPlay,
-            onOptions = ::showOptions,
-            onFavorite = { song ->
-                val active = LibraryRepository.toggleFavorite(this, song)
-                Toast.makeText(this, if (active) "Añadida a favoritos" else "Quitada de favoritos", Toast.LENGTH_SHORT).show()
-            },
-            isFavorite = { LibraryRepository.isFavorite(this, it) }
-        )
-        songList.layoutManager = LinearLayoutManager(this)
-        songList.adapter = adapter
-    }
-
-    private fun setupSearch() {
-        val suggestionAdapter = ArrayAdapter<String>(
-            this,
-            android.R.layout.simple_dropdown_item_1line,
-            mutableListOf()
-        )
-        searchInput.setAdapter(suggestionAdapter)
-
-        searchInput.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_SEARCH || searchInput.text.isNotBlank()) {
-                performSearch(searchInput.text.toString())
-                true
-            } else false
+    private fun createShell() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
         }
 
-        searchInput.setOnItemClickListener { _, _, position, _ ->
-            suggestionSongs.getOrNull(position)?.let { song ->
-                selectingSuggestion = true
-                searchInput.setText(song.titulo ?: "")
-                searchInput.setSelection(searchInput.text.length)
-                selectingSuggestion = false
-                performSearch(song.titulo ?: "")
-            }
+        root.addView(createHeader())
+
+        contentHost = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(8))
         }
+        root.addView(contentHost, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(createBottomNav())
+        setContentView(root)
+    }
 
-        searchInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: Editable?) {
-                if (selectingSuggestion) return
-                suggestionRunnable?.let(suggestionHandler::removeCallbacks)
-                val query = s?.toString()?.trim().orEmpty()
-                if (query.length < 2) {
-                    suggestionSongs = emptyList()
-                    suggestionAdapter.clear()
-                    return
-                }
+    private fun createHeader(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(dp(20), dp(18), dp(20), dp(10))
+        addView(TextView(this@MainActivity).apply {
+            text = "DRONNK"
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            letterSpacing = 0.18f
+            gravity = Gravity.CENTER
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "Asistente personal · v${BuildConfig.VERSION_NAME}"
+            textSize = 12f
+            setTextColor(scarletSoft)
+            gravity = Gravity.CENTER
+        })
+    }
 
-                suggestionRunnable = Runnable {
-                    lifecycleScope.launch {
-                        runCatching { ApiClient.api.buscar(query) }
-                            .onSuccess { response ->
-                                if (searchInput.text.toString().trim() != query) return@onSuccess
-                                suggestionSongs = response.canciones.take(7)
-                                suggestionAdapter.clear()
-                                suggestionAdapter.addAll(
-                                    suggestionSongs.map {
-                                        val artist = it.canal?.takeIf { a -> a.isNotBlank() }
-                                        if (artist != null) "${it.titulo ?: "Canción"} — $artist"
-                                        else it.titulo ?: "Canción"
-                                    }
-                                )
-                                suggestionAdapter.notifyDataSetChanged()
-                                if (suggestionSongs.isNotEmpty() && searchInput.hasFocus()) {
-                                    searchInput.showDropDown()
-                                }
-                            }
+    private fun createBottomNav(): View {
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(6), dp(8), dp(10))
+            setBackgroundColor(Color.rgb(11, 8, 9))
+        }
+        listOf("Inicio", "Herramientas", "Conversación", "Ajustes").forEach { label ->
+            nav.addView(Button(this).apply {
+                text = label
+                textSize = 10f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                background = rounded(if (label == "Inicio") surface2 else surface, 14f)
+                setOnClickListener {
+                    activeTab = label
+                    when (label) {
+                        "Inicio" -> showHome()
+                        "Herramientas" -> showTools()
+                        "Conversación" -> showConversation()
+                        else -> showSettings()
                     }
-                }.also { suggestionHandler.postDelayed(it, 350L) }
-            }
+                    refreshNav(nav)
+                }
+            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+        }
+        return nav
+    }
+
+    private fun refreshNav(nav: LinearLayout) {
+        for (i in 0 until nav.childCount) {
+            val button = nav.getChildAt(i) as Button
+            button.background = rounded(if (button.text.toString() == activeTab) surface2 else surface, 14f)
+            button.setTextColor(if (button.text.toString() == activeTab) scarletSoft else Color.WHITE)
+        }
+    }
+
+    private fun showHome() {
+        activeTab = "Inicio"
+        clearContent()
+        contentHost.gravity = Gravity.CENTER_HORIZONTAL
+
+        contentHost.addView(TextView(this).apply {
+            text = "◉"
+            textSize = 104f
+            gravity = Gravity.CENTER
+            setTextColor(scarlet)
+            setPadding(0, dp(8), 0, 0)
         })
 
-        findViewById<ImageButton>(R.id.clearSearch).setOnClickListener {
-            searchInput.setText("")
-            suggestionAdapter.clear()
-            showSearchHome()
+        statusView = TextView(this).apply {
+            text = "● EN LÍNEA"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(scarletSoft)
         }
+        contentHost.addView(statusView)
+
+        contentHost.addView(TextView(this).apply {
+            text = "Hola, ¿en qué puedo ayudarte?"
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(0, dp(18), 0, dp(18))
+        })
+
+        listenButton = Button(this).apply {
+            text = "🎙  Toca para hablar"
+            textSize = 16f
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = roundedStroke(surface2, scarlet, 28f, 2)
+            setOnClickListener { toggleListening() }
+        }
+        contentHost.addView(listenButton, LinearLayout.LayoutParams(-1, dp(62)).apply {
+            setMargins(dp(12), 0, dp(12), dp(14))
+        })
+
+        contentHost.addView(TextView(this).apply {
+            text = "Puedes decir: “llama a mamá”, “pon Dash Berlin en Spotify”, “abre WhatsApp”, “enciende la linterna” o “llévame a Miraflores”."
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(muted)
+            setPadding(dp(12), dp(8), dp(12), 0)
+        })
     }
 
-    private fun setupGenres() {
-        mapOf(
-            R.id.chipReggaeton to "reggaeton",
-            R.id.chipTrap to "trap latino",
-            R.id.chipPop to "pop",
-            R.id.chipSalsa to "salsa",
-            R.id.chipCumbia to "cumbia"
-        ).forEach { (id, query) ->
-            findViewById<View>(id).setOnClickListener {
-                searchInput.setText(query)
-                performSearch(query)
+    private fun showTools() {
+        clearContent()
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        list.addView(sectionTitle("Herramientas"))
+        val tools = listOf(
+            "📱 Abrir aplicaciones" to "abre WhatsApp",
+            "☎ Llamadas" to "llama a mamá",
+            "🎵 Música externa" to "pon música en Spotify",
+            "📷 Cámara" to "abre cámara",
+            "🔦 Linterna" to "enciende la linterna",
+            "🔊 Volumen" to "sube el volumen",
+            "Wi‑Fi" to "wifi",
+            "Bluetooth" to "bluetooth",
+            "📍 Navegación" to "llévame a Miraflores",
+            "⏰ Alarmas" to "pon alarma a las 7:30",
+            "📅 Calendario" to "crea evento reunión",
+            "🔋 Batería" to "batería"
+        )
+        tools.chunked(2).forEach { pair ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair.forEach { (label, command) ->
+                row.addView(toolCard(label) { execute(command) }, LinearLayout.LayoutParams(0, dp(92), 1f).apply {
+                    setMargins(dp(4), dp(4), dp(4), dp(4))
+                })
+            }
+            if (pair.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            list.addView(row)
+        }
+        scroll.addView(list)
+        contentHost.addView(scroll, LinearLayout.LayoutParams(-1, -1))
+    }
+
+    private fun showConversation() {
+        clearContent()
+        contentHost.addView(sectionTitle("Conversación"))
+
+        conversationView = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            background = rounded(surface, 18f)
+        }
+        refreshConversation()
+        val scroll = ScrollView(this).apply { addView(conversationView) }
+        contentHost.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        inputView = EditText(this).apply {
+            hint = "Escribe una orden…"
+            setHintTextColor(muted)
+            setTextColor(Color.WHITE)
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            background = rounded(surface2, 18f)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEND) {
+                    submitText()
+                    true
+                } else false
             }
         }
-    }
+        contentHost.addView(inputView, LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(10) })
 
-    private fun setupNavigation() {
-        findViewById<View>(R.id.navSearch).setOnClickListener { showSearchHome() }
-        findViewById<View>(R.id.navDownloads).setOnClickListener { showDownloads() }
-        findViewById<View>(R.id.navFavorites).setOnClickListener { showFavorites() }
-        findViewById<View>(R.id.navPlaylists).setOnClickListener { showPlaylists() }
-        findViewById<View>(R.id.navSettings).setOnClickListener { showSettings() }
-    }
-
-    private fun setupMiniPlayer() {
-        miniPlay.setOnClickListener {
-            PlayerManager.toggle()
-            refreshMiniPlayIcon()
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listenButton = Button(this).apply {
+            text = "🎙 HABLAR"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = rounded(surface2, 18f)
+            setOnClickListener { toggleListening() }
         }
-        miniPlayer.setOnClickListener {
-            if (PlayerManager.currentSong != null) {
-                startActivity(Intent(this, PlayerActivity::class.java))
-            }
+        val send = Button(this).apply {
+            text = "ENVIAR"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = rounded(scarlet, 18f)
+            setOnClickListener { submitText() }
         }
-    }
-
-    private fun showSearchHome() {
-        playlistListContainer.visibility = View.GONE
-        screenTitle.text = "Dronnk"
-        searchBox.visibility = View.VISIBLE
-        genreScroll.visibility = View.VISIBLE
-        emptyPanel.visibility = View.GONE
-        songList.visibility = View.VISIBLE
-        val history = LibraryRepository.history(this)
-        if (history.isNotEmpty()) {
-            sectionTitle.text = "Reproducidas recientemente"
-            adapter.submit(history.take(12))
-        } else {
-            sectionTitle.text = "Busca lo que quieras escuchar"
-            adapter.submit(emptyList())
-            showEmpty(
-                "Tu música empieza aquí",
-                "Busca una canción o artista. Dronnk reproduce archivos locales y contenido disponible; si una fuente externa no puede guardarse, podrás abrirla directamente.",
-                null
-            )
-        }
-    }
-
-    private fun performSearch(query: String) {
-        val clean = query.trim()
-        if (clean.isBlank()) return
-        LibraryRepository.addSearch(this, clean)
-        sectionTitle.text = "Resultados para “$clean”"
-        emptyPanel.visibility = View.GONE
-        songList.visibility = View.VISIBLE
-        loading.visibility = View.VISIBLE
-        lifecycleScope.launch {
-            try {
-                val result = ApiClient.api.buscar(clean)
-                adapter.submit(result.canciones)
-                if (result.canciones.isEmpty()) {
-                    showEmpty("Sin resultados", "Prueba con otro artista o nombre de canción.", null)
-                }
-            } catch (e: Exception) {
-                showEmpty("No se pudo buscar", "Revisa tu conexión e inténtalo nuevamente.", "Reintentar") {
-                    performSearch(clean)
-                }
-            } finally {
-                loading.visibility = View.GONE
-            }
-        }
-    }
-
-    private fun downloadThenPlay(song: Song) {
-        // Si ya existe el video local, Dronnk lo prefiere sobre el MP3.
-        DownloadRepository.preferredLocalMedia(this, song)?.let { local ->
-            LibraryRepository.addHistory(this, local)
-            PlayerManager.playLocal(this, local)
-            showMiniPlayer(local)
-            sectionTitle.text = if (local.mediaType == "video") {
-                "Reproduciendo video desde el dispositivo"
-            } else {
-                "Reproduciendo desde el dispositivo"
-            }
-            return
-        }
-
-        loading.visibility = View.VISIBLE
-        sectionTitle.text = "Preparando ${song.titulo ?: "canción"}…"
-        lifecycleScope.launch {
-            val result = DownloadRepository.ensureLocalMp3(this@MainActivity, song)
-            loading.visibility = View.GONE
-            result.onSuccess { local ->
-                LibraryRepository.addHistory(this@MainActivity, local)
-                PlayerManager.playLocal(this@MainActivity, local)
-                showMiniPlayer(local)
-                sectionTitle.text = "Reproduciendo desde el dispositivo"
-            }.onFailure {
-                showSourceFallback(song, "Esta canción no está disponible para guardar en Dronnk.")
-            }
-        }
-    }
-
-    private fun showMiniPlayer(song: Song) {
-        miniPlayer.visibility = View.VISIBLE
-        miniTitle.text = song.titulo ?: "Canción"
-        miniArtist.text = song.canal ?: "Dronnk"
-        miniCover.load(song.thumbnail) {
-            placeholder(R.drawable.dronnk_app_icon)
-            error(R.drawable.dronnk_app_icon)
-        }
-        refreshMiniPlayIcon()
-    }
-
-    private fun refreshMiniPlayIcon() {
-        miniPlay.setImageResource(if (PlayerManager.player?.isPlaying == true) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play)
-    }
-
-    private fun showOptions(song: Song) {
-        val sheet = BottomSheetDialog(this)
-        val view = layoutInflater.inflate(R.layout.layout_song_options, null)
-        sheet.setContentView(view)
-        view.findViewById<TextView>(R.id.optionsTitle).text = song.titulo ?: "Dronnk"
-        view.findViewById<TextView>(R.id.optionsArtist).text = song.canal ?: ""
-
-        val isFavorite = LibraryRepository.isFavorite(this, song)
-        view.findViewById<TextView>(R.id.actionFavoriteText).text = if (isFavorite) "Quitar de favoritos" else "Añadir a favoritos"
-        view.findViewById<ImageView>(R.id.actionFavoriteIcon).setImageResource(if (isFavorite) R.drawable.ic_heart_solid else R.drawable.ic_heart_outline)
-
-        view.findViewById<View>(R.id.actionAudio).setOnClickListener {
-            sheet.dismiss()
-            downloadThenPlay(song)
-        }
-        view.findViewById<View>(R.id.actionVideo).setOnClickListener {
-            sheet.dismiss()
-            downloadVideo(song)
-        }
-        view.findViewById<View>(R.id.actionFavorite).setOnClickListener {
-            LibraryRepository.toggleFavorite(this, song)
-            adapter.notifyDataSetChanged()
-            sheet.dismiss()
-        }
-        view.findViewById<View>(R.id.actionPlaylist).setOnClickListener {
-            sheet.dismiss()
-            showAddToPlaylist(song)
-        }
-        view.findViewById<View>(R.id.actionShare).setOnClickListener {
-            sheet.dismiss()
-            shareSong(song)
-        }
-        sheet.show()
-    }
-
-    private fun downloadVideo(song: Song) {
-        loading.visibility = View.VISIBLE
-        Toast.makeText(this, "Preparando video…", Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
-            DownloadRepository.downloadVideo(this@MainActivity, song)
-                .onSuccess { uri ->
-                    val localVideo = DownloadRepository.asDownloadedVideo(song, uri)
-                    LibraryRepository.addHistory(this@MainActivity, localVideo)
-                    PlayerManager.playLocal(this@MainActivity, localVideo)
-                    showMiniPlayer(localVideo)
-                    loading.visibility = View.GONE
-                    Toast.makeText(this@MainActivity, "Video guardado en Movies/Dronnk", Toast.LENGTH_LONG).show()
-                    startActivity(Intent(this@MainActivity, PlayerActivity::class.java))
-                }
-                .onFailure {
-                    loading.visibility = View.GONE
-                    showSourceFallback(song, "Este video no está disponible para guardar en Dronnk.")
-                }
-        }
-    }
-
-    private fun showSourceFallback(song: Song, message: String) {
-        val source = sequenceOf(song.sourceUrl, song.url)
-            .filterNotNull()
-            .map { it.trim() }
-            .firstOrNull { it.startsWith("http://") || it.startsWith("https://") }
-
-        if (source == null) {
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            return
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle(song.titulo ?: "Fuente externa")
-            .setMessage("$message\n\nPuedes abrir la fuente original.")
-            .setPositiveButton("Abrir fuente") { _, _ ->
-                runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(source)))
-                }.onFailure {
-                    Toast.makeText(this, "No se pudo abrir la fuente", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
-    }
-
-    private fun showDownloads() {
-        playlistListContainer.visibility = View.GONE
-        screenTitle.text = "Descargas"
-        searchBox.visibility = View.GONE
-        genreScroll.visibility = View.GONE
-        sectionTitle.text = "Audio guardado en Music/Dronnk"
-        val songs = DownloadRepository.downloadedAudio(this)
-        if (songs.isEmpty()) {
-            showEmpty("Aún no tienes descargas", "Las canciones que reproduzcas aparecerán aquí automáticamente.", null)
-        } else {
-            emptyPanel.visibility = View.GONE
-            songList.visibility = View.VISIBLE
-            adapter.submit(songs)
-        }
-    }
-
-    private fun showFavorites() {
-        playlistListContainer.visibility = View.GONE
-        screenTitle.text = "Favoritos"
-        searchBox.visibility = View.GONE
-        genreScroll.visibility = View.GONE
-        sectionTitle.text = "Tus canciones guardadas"
-        val songs = LibraryRepository.favorites(this)
-        if (songs.isEmpty()) {
-            showEmpty("Sin favoritos", "Usa el icono de corazón para guardar canciones aquí.", null)
-        } else {
-            emptyPanel.visibility = View.GONE
-            songList.visibility = View.VISIBLE
-            adapter.submit(songs)
-        }
-    }
-
-    private fun showPlaylists() {
-        screenTitle.text = "Playlists"
-        searchBox.visibility = View.GONE
-        genreScroll.visibility = View.GONE
-        sectionTitle.text = "Organiza tu música"
-
-        val playlists = LibraryRepository.playlists(this)
-        songList.visibility = View.GONE
-        emptyPanel.visibility = View.VISIBLE
-        emptyTitle.text = "Tus playlists"
-        emptyText.visibility = if (playlists.isEmpty()) View.VISIBLE else View.GONE
-        emptyText.text = "Crea tu primera playlist y añade canciones desde el menú de cada resultado."
-        emptyAction.visibility = View.VISIBLE
-        emptyAction.text = "Nueva playlist"
-        emptyAction.setOnClickListener { createPlaylistDialog() }
-
-        playlistListContainer.removeAllViews()
-        playlistListContainer.visibility = if (playlists.isEmpty()) View.GONE else View.VISIBLE
-
-        playlists.forEach { playlist ->
-            val row = TextView(this).apply {
-                text = "${playlist.name}  ·  ${playlist.songs.size} canciones"
-                setTextColor(Color.WHITE)
-                textSize = 16f
-                setTypeface(typeface, Typeface.BOLD)
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(22, 18, 22, 18)
-                isClickable = true
-                isFocusable = true
-                setBackgroundResource(R.drawable.bg_card)
-                setOnClickListener { showPlaylist(playlist.id) }
-            }
-            val params = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = (8 * resources.displayMetrics.density).toInt()
-            }
-            playlistListContainer.addView(row, params)
-        }
-    }
-
-    private fun showPlaylist(playlistId: String) {
-        val playlist = LibraryRepository.playlist(this, playlistId) ?: return
-        screenTitle.text = playlist.name
-        searchBox.visibility = View.GONE
-        genreScroll.visibility = View.GONE
-        sectionTitle.text = "${playlist.songs.size} canciones"
-        playlistListContainer.visibility = View.GONE
-
-        if (playlist.songs.isEmpty()) {
-            showEmpty(
-                playlist.name,
-                "Esta playlist todavía no tiene canciones.",
-                null
-            )
-        } else {
-            emptyPanel.visibility = View.GONE
-            songList.visibility = View.VISIBLE
-            adapter.submit(playlist.songs)
-        }
+        row.addView(listenButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(5) })
+        row.addView(send, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(5) })
+        contentHost.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
     }
 
     private fun showSettings() {
-        screenTitle.text = "Ajustes"
-        searchBox.visibility = View.GONE
-        genreScroll.visibility = View.GONE
-        sectionTitle.text = "Configuración"
-        playlistListContainer.visibility = View.GONE
-
-        showEmpty(
-            "Dronnk ${BuildConfig.VERSION_NAME}",
-            "Audio: MP3 · 192 kbps\nCarpeta de audio: Music/Dronnk\nCarpeta de video: Movies/Dronnk\nReproducción: archivo local",
-            "Buscar actualización"
-        ) {
-            checkForUpdates()
+        clearContent()
+        contentHost.addView(sectionTitle("Ajustes"))
+        addSetting("Voz y lenguaje", "Español (Perú)") { launch(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS), "Abriendo ajustes de voz.") }
+        addSetting("Permisos", "Micrófono, cámara y contactos") {
+            launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")), "Abriendo permisos de Dronnk.")
         }
+        addSetting("Apariencia", "Negro + escarlata") { reply("El tema escarlata de Dronnk está activo.", speak = false) }
+        addSetting("Actualizaciones", "Versión ${BuildConfig.VERSION_NAME}") { checkForUpdates(true) }
+        addSetting("Acerca de", "Dronnk Assistant") { reply("Dronnk es tu asistente personal para Android.", speak = false) }
     }
 
-    private fun checkForUpdates() {
-        loading.visibility = View.VISIBLE
-        lifecycleScope.launch {
-            AppUpdateManager.checkLatest(this@MainActivity)
-                .onSuccess { release ->
-                    loading.visibility = View.GONE
-                    if (release == null) {
-                        Toast.makeText(this@MainActivity, "Dronnk ya está actualizado", Toast.LENGTH_SHORT).show()
-                    } else {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("Nueva versión disponible")
-                            .setMessage("Dronnk ${release.versionName} está disponible. ¿Descargar actualización?")
-                            .setPositiveButton("Actualizar") { _, _ ->
-                                AppUpdateManager.startDownload(this@MainActivity, release)
-                            }
-                            .setNegativeButton("Ahora no", null)
-                            .show()
+    private fun addSetting(title: String, subtitle: String, action: () -> Unit) {
+        contentHost.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(surface, 18f)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setOnClickListener { action() }
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                textSize = 12f
+                setTextColor(muted)
+            })
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+    }
+
+    private fun toolCard(label: String, action: () -> Unit): View = TextView(this).apply {
+        text = label
+        textSize = 14f
+        gravity = Gravity.CENTER
+        setTextColor(Color.WHITE)
+        background = rounded(surface, 18f)
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+        setOnClickListener { action() }
+    }
+
+    private fun sectionTitle(textValue: String): View = TextView(this).apply {
+        text = textValue
+        textSize = 24f
+        setTextColor(Color.WHITE)
+        setTypeface(typeface, Typeface.BOLD)
+        setPadding(dp(4), dp(4), 0, dp(14))
+    }
+
+    private fun clearContent() {
+        contentHost.removeAllViews()
+        statusView = null
+        conversationView = null
+        inputView = null
+        listenButton = null
+    }
+
+    private fun configureSpeechRecognition() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
+        recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    listening = true
+                    statusView?.text = "● ESCUCHANDO"
+                    listenButton?.text = "■ DETENER"
+                }
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() { statusView?.text = "Procesando…" }
+                override fun onError(error: Int) {
+                    resetListening()
+                    if (error != SpeechRecognizer.ERROR_CLIENT && error != SpeechRecognizer.ERROR_NO_MATCH) {
+                        reply("No pude entenderte. Inténtalo otra vez.", speak = false)
                     }
                 }
-                .onFailure {
-                    loading.visibility = View.GONE
-                    Toast.makeText(
-                        this@MainActivity,
-                        "No se pudo comprobar la actualización",
-                        Toast.LENGTH_LONG
-                    ).show()
+                override fun onResults(results: Bundle?) {
+                    resetListening()
+                    results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()?.takeIf { it.isNotBlank() }?.let(::execute)
                 }
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+            })
         }
     }
 
-    private fun showEmpty(title: String, text: String, action: String?, onAction: (() -> Unit)? = null) {
-        playlistListContainer.visibility = View.GONE
-        songList.visibility = View.GONE
-        emptyPanel.visibility = View.VISIBLE
-        emptyTitle.text = title
-        emptyText.text = text
-        if (action != null) {
-            emptyAction.visibility = View.VISIBLE
-            emptyAction.text = action
-            emptyAction.setOnClickListener { onAction?.invoke() }
-        } else {
-            emptyAction.visibility = View.GONE
-            emptyAction.setOnClickListener(null)
+    private fun toggleListening() {
+        if (listening) {
+            recognizer?.stopListening()
+            resetListening()
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startListening()
+        } else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun startListening() {
+        recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-PE")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        })
+    }
+
+    private fun submitText() {
+        inputView?.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            inputView?.setText("")
+            execute(it)
         }
     }
 
-    private fun createPlaylistDialog(afterCreate: ((String) -> Unit)? = null) {
-        val input = EditText(this).apply {
-            hint = "Nombre de la playlist"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            setPadding(36, 18, 36, 18)
+    private fun execute(command: String, appendUser: Boolean = true) {
+        val q = command.lowercase(Locale.getDefault()).trim()
+        if (appendUser) appendConversation("Tú", command)
+
+        when {
+            q == "hola" || q.contains("hola dronnk") -> reply("Hola. Estoy listo.")
+            q.contains("qué hora") || q.contains("que hora") -> reply("Son las ${SimpleDateFormat("h:mm a", Locale("es", "PE")).format(Date())}.")
+            q.contains("qué fecha") || q.contains("que fecha") || q.contains("qué día") || q.contains("que dia") -> reply("Hoy es ${SimpleDateFormat("EEEE d 'de' MMMM", Locale("es", "PE")).format(Date())}.")
+            q.contains("batería") || q.contains("bateria") -> {
+                val battery = getSystemService(BATTERY_SERVICE) as BatteryManager
+                reply("Tienes ${battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
+            }
+            q.contains("enciende la linterna") || q.contains("prende la linterna") -> requestTorchOn()
+            q.contains("apaga la linterna") -> setTorch(false)
+            q.contains("sube el volumen") -> changeVolume(AudioManager.ADJUST_RAISE, "Subiendo el volumen.")
+            q.contains("baja el volumen") -> changeVolume(AudioManager.ADJUST_LOWER, "Bajando el volumen.")
+            q.contains("silencia") || q.contains("silencio") -> changeVolume(AudioManager.ADJUST_MUTE, "Silenciando el audio multimedia.")
+            q.contains("configuración") || q.contains("configuracion") || q == "ajustes" -> launch(Intent(Settings.ACTION_SETTINGS), "Abriendo configuración.")
+            q.contains("wifi") || q.contains("wi-fi") -> launch(Intent(Settings.ACTION_WIFI_SETTINGS), "Abriendo Wi-Fi.")
+            q.contains("bluetooth") -> launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS), "Abriendo Bluetooth.")
+            q.contains("cámara") || q.contains("camara") -> launch(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA), "Abriendo cámara.")
+            q.startsWith("llama a ") || q.startsWith("llamar a ") -> prepareCall(command)
+            q.startsWith("mensaje a ") || q.startsWith("mensaje al ") -> prepareSms(command)
+            q.startsWith("pon ") || q.startsWith("reproduce ") || q.startsWith("reproducir ") -> playExternalMusic(command)
+            q.startsWith("navega a ") || q.startsWith("llévame a ") || q.startsWith("llevame a ") -> {
+                val place = command.substringAfter(" a ").trim()
+                val maps = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${Uri.encode(place)}"))
+                if (canHandle(maps)) launch(maps, "Abriendo navegación a $place.")
+                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(place)}")), "Buscando $place en mapas.")
+            }
+            q.startsWith("busca ") || q.startsWith("buscar ") -> searchWeb(command.substringAfter(" ").trim())
+            q.contains("alarma") -> setAlarm(command)
+            q.startsWith("crea evento ") || q.startsWith("crear evento ") -> createCalendarEvent(command)
+            q.contains("actualización") || q.contains("actualizacion") || q == "actualiza" -> checkForUpdates(true)
+            q.startsWith("abre ") || q.startsWith("abrir ") -> openApp(command.substringAfter(" ").trim())
+            else -> reply("Aún no tengo una acción para “$command”. Puedo abrir apps, llamar por contacto, buscar música en apps externas, controlar linterna y volumen, navegar, crear alarmas y consultar tu dispositivo.")
         }
-        AlertDialog.Builder(this)
-            .setTitle("Nueva playlist")
-            .setView(input)
-            .setPositiveButton("Crear") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isNotBlank()) {
-                    val playlist = LibraryRepository.createPlaylist(this, name)
-                    afterCreate?.invoke(playlist.id)
-                    showPlaylists()
-                }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
     }
 
-    private fun showAddToPlaylist(song: Song) {
-        val playlists = LibraryRepository.playlists(this)
-        val names = playlists.map { it.name }.toMutableList()
-        names.add("Nueva playlist")
-        AlertDialog.Builder(this)
-            .setTitle("Añadir a playlist")
-            .setItems(names.toTypedArray()) { _, which ->
-                if (which == playlists.size) {
-                    createPlaylistDialog { id ->
-                        LibraryRepository.addToPlaylist(this, id, song)
-                        Toast.makeText(this, "Canción añadida", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    LibraryRepository.addToPlaylist(this, playlists[which].id, song)
-                    Toast.makeText(this, "Añadida a ${playlists[which].name}", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .show()
+    private fun prepareCall(command: String) {
+        val target = command.substringAfter(" a ").trim()
+        val directNumber = target.filter { it.isDigit() || it == '+' }
+        if (directNumber.length >= 5 && directNumber.length >= target.length - 2) {
+            launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$directNumber")), "Preparando llamada.")
+            return
+        }
+        withContactPermission(command) {
+            val contact = findContact(target)
+            if (contact == null) reply("No encontré a $target en tus contactos.")
+            else launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(contact.second)}")), "Preparando llamada a ${contact.first}.")
+        }
     }
 
-    private fun shareSong(song: Song) {
-        val local = song.localPath ?: song.url
-        if (!local.isNullOrBlank() && (local.startsWith("content://") || local.startsWith("file://"))) {
-            val uri = Uri.parse(local)
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "audio/mpeg"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, "${song.titulo ?: "Canción"} — ${song.canal ?: "Dronnk"}")
-                clipData = ClipData.newRawUri("Dronnk audio", uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(send, "Compartir canción"))
+    private fun prepareSms(command: String) {
+        val after = command.substringAfter(" a ").substringAfter(" al ").trim()
+        val number = after.takeWhile { it.isDigit() || it == '+' }
+        if (number.length >= 5) {
+            val message = after.drop(number.length).trim()
+            openSms(number, message)
             return
         }
 
-        val source = song.sourceUrl ?: song.url
-        val text = buildString {
-            append(song.titulo ?: "Canción")
-            song.canal?.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
-            source?.takeIf { it.startsWith("http") }?.let { append("\n").append(it) }
-        }
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, text)
-        }
-        startActivity(Intent.createChooser(send, "Compartir canción"))
-    }
-
-    private fun applySystemInsets() {
-        val root = findViewById<View>(R.id.mainRoot)
-        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(
-                view.paddingLeft,
-                bars.top,
-                view.paddingRight,
-                bars.bottom
-            )
-            insets
-        }
-        ViewCompat.requestApplyInsets(root)
-    }
-
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 300)
+        val lower = after.lowercase(Locale.getDefault())
+        val split = lower.indexOf(" diciendo ").takeIf { it >= 0 } ?: lower.indexOf(" mensaje ").takeIf { it >= 0 }
+        val name = if (split != null) after.substring(0, split).trim() else after
+        val body = if (split != null) after.substring(split).substringAfter(' ').trim() else ""
+        withContactPermission(command) {
+            val contact = findContact(name)
+            if (contact == null) reply("No encontré a $name en tus contactos.") else openSms(contact.second, body)
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        PlayerManager.currentSong?.let { showMiniPlayer(it) }
+    private fun withContactPermission(command: String, action: () -> Unit) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+            action()
+        } else {
+            pendingContactCommand = command
+            contactsPermission.launch(Manifest.permission.READ_CONTACTS)
+        }
+    }
+
+    private fun findContact(name: String): Pair<String, String>? {
+        val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER)
+        contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            projection,
+            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+            arrayOf("%$name%"),
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val display = cursor.getString(0)
+                val number = cursor.getString(1)
+                return display to number
+            }
+        }
+        return null
+    }
+
+    private fun openSms(number: String, message: String) {
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${Uri.encode(number)}")).apply {
+            if (message.isNotBlank()) putExtra("sms_body", message)
+        }
+        launch(intent, "Preparando mensaje.")
+    }
+
+    private fun playExternalMusic(command: String) {
+        val q = command.lowercase(Locale.getDefault())
+        val provider = when {
+            q.contains("spotify") -> "spotify"
+            q.contains("youtube music") -> "youtube_music"
+            q.contains("youtube") -> "youtube"
+            else -> "spotify"
+        }
+        val query = command
+            .replace(Regex("(?i)^(pon|reproduce|reproducir)\\s+"), "")
+            .replace(Regex("(?i)\\s+(en|desde)\\s+(spotify|youtube music|youtube).*$"), "")
+            .replace(Regex("(?i)^música\\s*"), "")
+            .trim()
+
+        when (provider) {
+            "spotify" -> {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:${Uri.encode(query.ifBlank { "música" })}")).apply {
+                    setPackage("com.spotify.music")
+                }
+                if (canHandle(intent)) launch(intent, "Abriendo Spotify${if (query.isBlank()) "." else " y buscando $query."}")
+                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/${Uri.encode(query.ifBlank { "music" })}")), "Abriendo Spotify.")
+            }
+            "youtube_music" -> {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")).apply {
+                    setPackage("com.google.android.apps.youtube.music")
+                }
+                if (canHandle(intent)) launch(intent, "Buscando $query en YouTube Music.")
+                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")), "Buscando $query en YouTube Music.")
+            }
+            else -> {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")).apply {
+                    setPackage("com.google.android.youtube")
+                }
+                if (canHandle(intent)) launch(intent, "Buscando $query en YouTube.")
+                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")), "Buscando $query en YouTube.")
+            }
+        }
+    }
+
+    private fun requestTorchOn() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) setTorch(true)
+        else cameraPermission.launch(Manifest.permission.CAMERA)
+    }
+
+    private fun setTorch(enabled: Boolean) {
+        val cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
+        val cameraId = runCatching {
+            cameraManager.cameraIdList.firstOrNull { id ->
+                cameraManager.getCameraCharacteristics(id)
+                    .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            }
+        }.getOrNull()
+        if (cameraId == null) {
+            reply("No encontré una linterna disponible.")
+            return
+        }
+        runCatching { cameraManager.setTorchMode(cameraId, enabled) }
+            .onSuccess { reply(if (enabled) "Linterna encendida." else "Linterna apagada.") }
+            .onFailure { reply("No pude cambiar la linterna.") }
+    }
+
+    private fun changeVolume(direction: Int, message: String) {
+        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+        runCatching { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI) }
+            .onSuccess { reply(message) }
+            .onFailure { reply("No pude cambiar el volumen.") }
+    }
+
+    private fun searchWeb(query: String) {
+        if (query.isBlank()) {
+            reply("Dime qué quieres buscar.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query)
+        if (canHandle(intent)) launch(intent, "Buscando $query.")
+        else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")), "Buscando $query.")
+    }
+
+    private fun setAlarm(command: String) {
+        val match = Regex("(\\d{1,2})(?::(\\d{2}))?").find(command)
+        val hour = match?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val minute = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+        if (hour == null || hour !in 0..23 || minute !in 0..59) {
+            reply("Dime una hora, por ejemplo: pon alarma a las 7:30.")
+            return
+        }
+        launch(Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            putExtra(AlarmClock.EXTRA_HOUR, hour)
+            putExtra(AlarmClock.EXTRA_MINUTES, minute)
+            putExtra(AlarmClock.EXTRA_MESSAGE, "Dronnk")
+        }, "Preparando alarma para las %d:%02d.".format(hour, minute))
+    }
+
+    private fun createCalendarEvent(command: String) {
+        val title = command.substringAfter("evento ").trim().ifBlank { "Evento de Dronnk" }
+        launch(Intent(Intent.ACTION_INSERT).apply {
+            data = CalendarContract.Events.CONTENT_URI
+            putExtra(CalendarContract.Events.TITLE, title)
+        }, "Preparando el evento “$title”.")
+    }
+
+    private fun openApp(name: String) {
+        if (name.isBlank()) {
+            reply("Dime qué aplicación quieres abrir.")
+            return
+        }
+        val normalized = name.lowercase(Locale.getDefault())
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val match = packageManager.queryIntentActivities(launcherIntent, 0).firstOrNull { info ->
+            info.loadLabel(packageManager).toString().lowercase(Locale.getDefault()).contains(normalized)
+        }
+        val launchIntent = match?.activityInfo?.packageName?.let(packageManager::getLaunchIntentForPackage)
+        if (launchIntent != null && match != null) launch(launchIntent, "Abriendo ${match.loadLabel(packageManager)}.")
+        else reply("No encontré una app llamada $name.")
+    }
+
+    private fun checkForUpdates(showIfCurrent: Boolean) {
+        statusView?.text = "Buscando actualización…"
+        uiScope.launch {
+            val result = AppUpdateManager.checkLatest(this@MainActivity)
+            statusView?.text = "● EN LÍNEA"
+            result.onSuccess { release ->
+                if (release == null) {
+                    if (showIfCurrent) reply("Ya tienes la versión más reciente de Dronnk.", speak = false)
+                    return@onSuccess
+                }
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Dronnk ${release.versionName} disponible")
+                    .setMessage("Hay una nueva versión lista para instalar.")
+                    .setNegativeButton("Después", null)
+                    .setPositiveButton("Actualizar") { _, _ -> AppUpdateManager.startDownload(this@MainActivity, release) }
+                    .show()
+            }.onFailure {
+                if (showIfCurrent) reply("No pude comprobar actualizaciones en este momento.", speak = false)
+            }
+        }
+    }
+
+    private fun launch(intent: Intent, message: String) {
+        if (canHandle(intent)) {
+            reply(message)
+            startActivity(intent)
+        } else reply("No encontré una aplicación compatible para esa acción.")
+    }
+
+    private fun canHandle(intent: Intent) = intent.resolveActivity(packageManager) != null
+
+    private fun reply(message: String, speak: Boolean = true) {
+        appendConversation("Dronnk", message)
+        statusView?.text = "● EN LÍNEA"
+        if (speak) tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "dronnk-response")
+    }
+
+    private fun appendConversation(author: String, message: String) {
+        conversationLog += author to message
+        refreshConversation()
+    }
+
+    private fun refreshConversation() {
+        conversationView?.text = conversationLog.joinToString("\n\n") { (author, message) -> "$author: $message" }
+    }
+
+    private fun resetListening() {
+        listening = false
+        statusView?.text = "● EN LÍNEA"
+        listenButton?.text = "🎙  Toca para hablar"
+    }
+
+    override fun onInit(result: Int) {
+        if (result == TextToSpeech.SUCCESS) tts?.language = Locale("es", "PE")
     }
 
     override fun onDestroy() {
-        suggestionRunnable?.let(suggestionHandler::removeCallbacks)
+        recognizer?.destroy()
+        tts?.stop()
+        tts?.shutdown()
+        uiScope.cancel()
         super.onDestroy()
     }
+
+    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius.toInt()).toFloat()
+    }
+
+    private fun roundedStroke(color: Int, strokeColor: Int, radius: Float, strokeWidth: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius.toInt()).toFloat()
+        setStroke(dp(strokeWidth), strokeColor)
+    }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 }
