@@ -21,8 +21,8 @@ android {
         applicationId = "com.german.dronnk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "2.0.8"
+        versionCode = 23
+        versionName = "2.0.9"
         buildConfigField("String", "YOUTUBE_API_KEY", "\"$youtubeApiKey\"")
     }
 
