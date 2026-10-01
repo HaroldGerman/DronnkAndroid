@@ -1,3 +1,13 @@
+import java.util.Properties
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use(::load)
+}
+val youtubeApiKey = localProperties.getProperty("YOUTUBE_API_KEY", "")
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,8 +21,9 @@ android {
         applicationId = "com.german.dronnk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "2.0.6"
+        versionCode = 21
+        versionName = "2.0.7"
+        buildConfigField("String", "YOUTUBE_API_KEY", "\"$youtubeApiKey\"")
     }
 
     buildFeatures {
