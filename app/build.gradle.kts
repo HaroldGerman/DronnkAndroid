@@ -11,8 +11,8 @@ android {
         applicationId = "com.german.dronnk"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "2.0.4"
+        versionCode = 19
+        versionName = "2.0.5"
     }
 
     buildFeatures {
