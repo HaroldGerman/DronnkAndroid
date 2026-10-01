@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <intent>
@@ -32,6 +35,13 @@
         android:roundIcon="@drawable/dronnk_assistant_icon"
         android:label="Dronnk"
         android:theme="@style/Theme.Dronnk">
+
+        <service
+            android:name=".voice.HandsFreeService"
+            android:exported="false"
+            android:foregroundServiceType="microphone"
+            android:stopWithTask="false" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true">
