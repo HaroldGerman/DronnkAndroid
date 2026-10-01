@@ -12,6 +12,7 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.AlarmClock
 import android.provider.CalendarContract
@@ -35,6 +36,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.german.dronnk.BuildConfig
 import com.german.dronnk.update.AppUpdateManager
+import com.german.dronnk.voice.HandsFreeService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -69,6 +71,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startListening() else reply("Necesito permiso de micrófono para escucharte. También puedes escribirme.")
+    }
+
+    private val handsFreeMicPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startHandsFree() else reply("Necesito permiso de micrófono para activar Dronnk manos libres.", false)
+    }
+
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startHandsFree() else reply("Puedes usar manos libres, pero Android puede ocultar la notificación de estado.", false)
     }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -176,7 +186,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             setTextColor(scarlet)
         })
         statusView = TextView(this).apply {
-            text = "● EN LÍNEA"
+            text = if (isHandsFreeEnabled()) "● MANOS LIBRES ACTIVO" else "● EN LÍNEA"
             textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(scarletSoft)
@@ -199,7 +209,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         contentHost.addView(listenButton, LinearLayout.LayoutParams(-1, dp(62)).apply { setMargins(dp(12), 0, dp(12), dp(14)) })
         contentHost.addView(TextView(this).apply {
-            text = "Prueba: “abre WhatsApp y entra al chat de Mirella”, “pon Dash Berlin en Spotify”, “llama a mamá” o “llévame a Miraflores”."
+            text = if (isHandsFreeEnabled()) {
+                "Manos libres activo. Con la pantalla bloqueada di “Dronnk” y luego tu orden."
+            } else {
+                "Prueba: “abre WhatsApp y entra al chat de Mirella”, “pon Dash Berlin en Spotify”, “llama a mamá” o activa Manos libres en Ajustes."
+            }
             textSize = 13f
             gravity = Gravity.CENTER
             setTextColor(muted)
@@ -283,8 +297,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun showSettings() {
+        activeTab = "Ajustes"
         clearContent()
         contentHost.addView(sectionTitle("Ajustes"))
+        val handsFreeEnabled = isHandsFreeEnabled()
+        addSetting(
+            "Manos libres",
+            if (handsFreeEnabled) "Activo · di “Dronnk” incluso con la pantalla bloqueada" else "Desactivado · toca para activar"
+        ) { toggleHandsFreeMode() }
         addSetting("Voz y lenguaje", "Español (Perú)") { launch(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS), "Abriendo ajustes de voz.") }
         addSetting("Permisos", "Micrófono, cámara y contactos") {
             launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")), "Abriendo permisos de Dronnk.")
@@ -293,6 +313,43 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         addSetting("Actualizaciones", "Versión ${BuildConfig.VERSION_NAME}") { checkForUpdates(true) }
         addSetting("Acerca de", "Dronnk Assistant") { reply("Dronnk es tu asistente personal para Android.", false) }
     }
+
+    private fun toggleHandsFreeMode() {
+        if (isHandsFreeEnabled()) {
+            stopHandsFree()
+            reply("Modo manos libres desactivado.", false)
+            showSettings()
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            handsFreeMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        startHandsFree()
+    }
+
+    private fun startHandsFree() {
+        val intent = Intent(this, HandsFreeService::class.java).setAction(HandsFreeService.ACTION_START)
+        runCatching { ContextCompat.startForegroundService(this, intent) }
+            .onSuccess {
+                getSharedPreferences(HandsFreeService.PREFS, MODE_PRIVATE).edit().putBoolean(HandsFreeService.KEY_ENABLED, true).apply()
+                reply("Modo manos libres activado. Puedes bloquear el celular y decir Dronnk.", false)
+                if (activeTab == "Ajustes") showSettings() else showHome()
+            }
+            .onFailure { reply("No pude activar manos libres. Mantén Dronnk abierto y vuelve a intentarlo.", false) }
+    }
+
+    private fun stopHandsFree() {
+        startService(Intent(this, HandsFreeService::class.java).setAction(HandsFreeService.ACTION_STOP))
+        getSharedPreferences(HandsFreeService.PREFS, MODE_PRIVATE).edit().putBoolean(HandsFreeService.KEY_ENABLED, false).apply()
+    }
+
+    private fun isHandsFreeEnabled(): Boolean =
+        getSharedPreferences(HandsFreeService.PREFS, MODE_PRIVATE).getBoolean(HandsFreeService.KEY_ENABLED, false)
 
     private fun addSetting(title: String, subtitle: String, action: () -> Unit) {
         contentHost.addView(LinearLayout(this).apply {
@@ -623,7 +680,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         statusView?.text = "Buscando actualización…"
         uiScope.launch {
             val result = AppUpdateManager.checkLatest(this@MainActivity)
-            statusView?.text = "● EN LÍNEA"
+            statusView?.text = if (isHandsFreeEnabled()) "● MANOS LIBRES ACTIVO" else "● EN LÍNEA"
             result.onSuccess { release ->
                 if (release == null) { if (showIfCurrent) reply("Ya tienes la versión más reciente de Dronnk.", false); return@onSuccess }
                 AlertDialog.Builder(this@MainActivity)
@@ -644,13 +701,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun reply(message: String, speak: Boolean = true) {
         appendConversation("Dronnk", message)
-        statusView?.text = "● EN LÍNEA"
+        statusView?.text = if (isHandsFreeEnabled()) "● MANOS LIBRES ACTIVO" else "● EN LÍNEA"
         if (speak) tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "dronnk-response")
     }
 
     private fun appendConversation(author: String, message: String) { conversationLog += author to message; refreshConversation() }
     private fun refreshConversation() { conversationView?.text = conversationLog.joinToString("\n\n") { (author, message) -> "$author: $message" } }
-    private fun resetListening() { listening = false; statusView?.text = "● EN LÍNEA"; listenButton?.text = "🎙  Toca para hablar" }
+    private fun resetListening() { listening = false; statusView?.text = if (isHandsFreeEnabled()) "● MANOS LIBRES ACTIVO" else "● EN LÍNEA"; listenButton?.text = "🎙  Toca para hablar" }
 
     override fun onInit(result: Int) { if (result == TextToSpeech.SUCCESS) tts?.language = Locale("es", "PE") }
 
