@@ -64,10 +64,20 @@ Permisos declarados:
 
 Los permisos sensibles se solicitan cuando la función correspondiente los necesita. Dronnk no intenta concederse permisos por sí mismo ni saltarse restricciones del sistema operativo.
 
+## Build local
+El proyecto usa Android Gradle Plugin 8.9.x y Gradle Wrapper 8.11.1. No se usan GitHub Actions.
+
+Antes de publicar una actualización hay que verificar que el nuevo APK esté firmado con el mismo certificado que Dronnk 1.x. El repositorio incluye `scripts/verify-update-signature.ps1` para comparar el SHA-256 de ambos certificados con `apksigner`.
+
 ## Actualizaciones
 Dronnk consulta la última GitHub Release de `HaroldGerman/DronnkAndroid`. Si encuentra una versión superior, permite descargar su APK con `DownloadManager`.
 
-No se usan GitHub Actions para compilar ni publicar la aplicación.
-
 ## Antes de publicar 2.0
-El código fuente debe compilarse con un Android SDK compatible y el APK que se entregue como actualización debe estar firmado con la misma clave/certificado que la versión Dronnk instalada actualmente. Una firma diferente hará que Android rechace la instalación como actualización.
+1. Compilar con Android SDK/API 36.
+2. Probar las funciones en Android 16.
+3. Firmar con el mismo certificado de Dronnk 1.x.
+4. Comparar las firmas con `scripts/verify-update-signature.ps1`.
+5. Instalar encima de Dronnk 1.x sin desinstalar.
+6. Solo entonces publicar el APK en GitHub Releases.
+
+Consulta `docs/FINAL_CHECKLIST.md` para el control final.
