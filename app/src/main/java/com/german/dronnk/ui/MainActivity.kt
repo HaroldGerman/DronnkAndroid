@@ -38,11 +38,13 @@ import androidx.core.content.ContextCompat
 import com.german.dronnk.BuildConfig
 import com.german.dronnk.update.AppUpdateManager
 import com.german.dronnk.voice.HandsFreeService
+import com.german.dronnk.youtube.YouTubeSearchClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -70,6 +72,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var activeTab = "Inicio"
     private val conversationLog = mutableListOf<Pair<String, String>>()
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val youtubeSearch by lazy { YouTubeSearchClient(this) }
 
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startListening() else reply("Necesito permiso de micrófono para escucharte. También puedes escribirme.")
@@ -221,7 +224,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             text = if (isHandsFreeEnabled()) {
                 "Manos libres activo. Di “Dronnk” y luego tu orden."
             } else {
-                "Prueba: “llama a mamá”, “pausa la música”, “abre WhatsApp” o activa Manos libres en Ajustes."
+                "Prueba: “llama a mamá”, “pon Dash Berlin en YouTube”, “abre WhatsApp” o activa Manos libres en Ajustes."
             }
             textSize = 13f
             gravity = Gravity.CENTER
@@ -239,6 +242,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             "📱 Abrir aplicaciones" to "abre WhatsApp",
             "💬 WhatsApp" to "abre WhatsApp",
             "☎ Llamadas" to "llama a mamá",
+            "▶ YouTube" to "pon Dash Berlin en YouTube",
             "🎵 Spotify" to "pon Dash Berlin en Spotify",
             "⏸ Pausar" to "pausa la música",
             "⏭ Siguiente" to "siguiente canción",
@@ -609,10 +613,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (canHandle(intent)) launch(intent, "Abriendo la búsqueda de $query en YouTube Music.")
                 else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")), "Abriendo la búsqueda de $query en YouTube Music.")
             }
-            else -> {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")).setPackage("com.google.android.youtube")
-                if (canHandle(intent)) launch(intent, "Abriendo la búsqueda de $query en YouTube.")
-                else launch(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")), "Abriendo la búsqueda de $query en YouTube.")
+            else -> playYouTubeVideo(query)
+        }
+    }
+
+    private fun playYouTubeVideo(query: String) {
+        val clean = query.ifBlank { "música" }
+        reply("Buscando $clean en YouTube.", false)
+        uiScope.launch {
+            val result = withContext(Dispatchers.IO) { youtubeSearch.findFirstVideoId(clean) }
+            result.onSuccess { videoId ->
+                val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$videoId")).setPackage("com.google.android.youtube")
+                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
+                if (canHandle(appIntent)) launch(appIntent, "Reproduciendo $clean en YouTube.")
+                else launch(fallback, "Reproduciendo $clean en YouTube.")
+            }.onFailure {
+                reply("No pude encontrar ese video en YouTube. Revisa la configuración de la API de YouTube.")
             }
         }
     }
