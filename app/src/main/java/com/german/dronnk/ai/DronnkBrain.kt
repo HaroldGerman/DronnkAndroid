@@ -15,6 +15,8 @@ class DronnkBrain {
     data class Decision(
         val action: String,
         val value: String = "",
+        val target: String = "",
+        val message: String = "",
         val reply: String = ""
     )
 
@@ -27,8 +29,9 @@ class DronnkBrain {
 
     private val history = ArrayDeque<Turn>()
     private val allowedActions = setOf(
-        "OPEN_APP", "CALL_CONTACT", "WHATSAPP_CHAT", "PLAY_YOUTUBE", "SPOTIFY_SEARCH",
-        "TORCH_ON", "TORCH_OFF", "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS",
+        "OPEN_APP", "CALL_CONTACT", "WHATSAPP_CHAT", "WHATSAPP_MESSAGE",
+        "PLAY_YOUTUBE", "SPOTIFY_SEARCH", "TORCH_ON", "TORCH_OFF",
+        "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS",
         "BATTERY", "NONE"
     )
 
@@ -40,23 +43,32 @@ class DronnkBrain {
         require(message.isNotBlank()) { "Mensaje vacío" }
 
         val system = """
-            Eres Dronnk, un asistente Android en español. Debes interpretar la intención del usuario y decidir si hace falta ejecutar una acción del teléfono.
+            Eres Dronnk, un asistente Android en español. Tu trabajo es interpretar órdenes naturales y decidir qué herramienta del teléfono debe usar Dronnk.
             Devuelve SOLO JSON válido, sin markdown ni texto adicional.
-            Formato exacto: {"action":"...","value":"...","reply":"..."}
+
+            Formato exacto:
+            {"action":"...","value":"...","target":"...","message":"...","reply":"..."}
 
             Acciones permitidas:
-            OPEN_APP, CALL_CONTACT, WHATSAPP_CHAT, PLAY_YOUTUBE, SPOTIFY_SEARCH,
-            TORCH_ON, TORCH_OFF, MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS,
+            OPEN_APP, CALL_CONTACT, WHATSAPP_CHAT, WHATSAPP_MESSAGE,
+            PLAY_YOUTUBE, SPOTIFY_SEARCH, TORCH_ON, TORCH_OFF,
+            MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS,
             BATTERY, NONE.
 
             Reglas:
-            - Usa value solo para nombre de app, contacto o búsqueda cuando corresponda.
-            - Para preguntas o conversación sin acción usa NONE y responde en reply.
-            - Si el usuario habla de forma indirecta, infiere la acción más razonable. Ejemplo: “está muy oscuro” puede ser TORCH_ON.
+            - OPEN_APP: value = nombre de la app.
+            - CALL_CONTACT: target = nombre o número de la persona.
+            - WHATSAPP_CHAT: target = nombre de la persona.
+            - WHATSAPP_MESSAGE: target = persona y message = texto que el usuario quiere enviar.
+            - PLAY_YOUTUBE y SPOTIFY_SEARCH: value = búsqueda musical o de video.
+            - NONE: úsalo para conversación o preguntas que no necesitan una acción del teléfono.
+            - Si el usuario dice “escríbele”, “dile por WhatsApp”, “mándale un mensaje”, “avísale”, etc., usa WHATSAPP_MESSAGE.
+            - No corrijas nombres propios agresivamente. Conserva el nombre tal como lo dijo el usuario; Android resolverá variantes fonéticas contra sus contactos.
+            - Si el usuario habla indirectamente, infiere la acción más razonable. Ejemplo: “está oscuro” puede ser TORCH_ON.
             - No inventes acciones fuera de la lista.
-            - No afirmes que una acción se ejecutó; solo decide qué acción debe ejecutar Dronnk.
-            - Mantén reply breve y natural.
-            - Usa el contexto reciente si el usuario responde con frases como “sí”, “esa”, “la anterior” o “hazlo”.
+            - No afirmes que una acción ya ocurrió; solo decide qué debe hacer Dronnk.
+            - reply debe ser breve y natural.
+            - Usa el contexto reciente para frases como “sí”, “esa”, “hazlo”, “a ella”, “pausa eso”.
         """.trimIndent()
 
         val contents = JSONArray()
@@ -72,6 +84,8 @@ class DronnkBrain {
                     JSONObject().apply {
                         put("action", turn.decision.action)
                         put("value", turn.decision.value)
+                        put("target", turn.decision.target)
+                        put("message", turn.decision.message)
                         put("reply", turn.decision.reply)
                     }.toString()
                 )))
@@ -119,11 +133,13 @@ class DronnkBrain {
             val decision = Decision(
                 action = action,
                 value = json.optString("value", "").trim(),
+                target = json.optString("target", "").trim(),
+                message = json.optString("message", "").trim(),
                 reply = json.optString("reply", "").trim()
             )
 
             history.addLast(Turn(message, decision))
-            while (history.size > 4) history.removeFirst()
+            while (history.size > 6) history.removeFirst()
             decision
         }
     }
