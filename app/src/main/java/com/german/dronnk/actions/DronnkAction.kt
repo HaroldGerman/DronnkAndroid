@@ -3,8 +3,9 @@ package com.german.dronnk.actions
 enum class ActionType {
     OPEN_APP,
     CALL_CONTACT,
-    WHATSAPP_CHAT,
-    WHATSAPP_MESSAGE,
+    CALL_IN_APP,
+    OPEN_CHAT,
+    PREPARE_MESSAGE,
     PLAY_YOUTUBE,
     SPOTIFY_SEARCH,
     TORCH_ON,
@@ -22,6 +23,7 @@ enum class ActionType {
 
 data class DronnkAction(
     val type: ActionType,
+    val app: String = "",
     val value: String = "",
     val target: String = "",
     val message: String = "",
