@@ -11,9 +11,11 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile private var pendingMessage: String? = null
         @Volatile private var pendingSince: Long = 0L
+        @Volatile var connected: Boolean = false
+            private set
 
         fun queueSend(message: String) {
-            pendingMessage = message
+            pendingMessage = message.trim().takeIf { it.isNotBlank() }
             pendingSince = System.currentTimeMillis()
         }
 
@@ -24,52 +26,110 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private var clickScheduled = false
+    private var retryCount = 0
+    private var scheduled = false
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        connected = true
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString().orEmpty()
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
-        val message = pendingMessage ?: return
+        if (pendingMessage == null) return
+        scheduleAttempt()
+    }
 
-        if (System.currentTimeMillis() - pendingSince > 20_000L) {
+    private fun scheduleAttempt() {
+        if (scheduled) return
+        scheduled = true
+        handler.postDelayed({
+            scheduled = false
+            attemptSend()
+        }, if (retryCount == 0) 550L else 350L)
+    }
+
+    private fun attemptSend() {
+        val expected = pendingMessage ?: return
+        if (System.currentTimeMillis() - pendingSince > 25_000L) {
             clearPending()
+            retryCount = 0
             return
         }
 
-        if (!clickScheduled) {
-            clickScheduled = true
-            handler.postDelayed({
-                clickScheduled = false
-                val root = rootInActiveWindow ?: return@postDelayed
-                if (composerContains(root, message) && clickSend(root)) {
-                    clearPending()
-                }
-            }, 700L)
+        val root = rootInActiveWindow
+        if (root == null) {
+            retryLater()
+            return
         }
+
+        val composer = findComposer(root)
+        val composerText = composer?.text?.toString().orEmpty()
+        val expectedVisible = composerText.contains(expected, ignoreCase = false)
+        val hasPreparedText = composerText.isNotBlank()
+
+        // wa.me can populate the composer before Accessibility exposes the exact
+        // text. While a Dronnk message is pending, a non-empty composer in the
+        // target WhatsApp window is enough to try the real Send control.
+        if ((expectedVisible || hasPreparedText) && clickSend(root)) {
+            clearPending()
+            retryCount = 0
+            return
+        }
+
+        retryLater()
     }
 
-    private fun composerContains(node: AccessibilityNodeInfo, message: String): Boolean {
-        if (node.className?.toString()?.contains("EditText") == true) {
-            val text = node.text?.toString().orEmpty()
-            if (text.contains(message, ignoreCase = false)) return true
+    private fun retryLater() {
+        retryCount++
+        if (retryCount > 18) {
+            clearPending()
+            retryCount = 0
+            return
         }
+        scheduleAttempt()
+    }
+
+    private fun findComposer(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val viewId = node.viewIdResourceName.orEmpty().lowercase()
+        val className = node.className?.toString().orEmpty()
+        if (
+            className.contains("EditText") ||
+            viewId.endsWith(":id/entry") ||
+            viewId.contains("conversation_entry") ||
+            viewId.contains("message_entry")
+        ) {
+            return node
+        }
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (composerContains(child, message)) return true
+            findComposer(child)?.let { return it }
         }
-        return false
+        return null
     }
 
     private fun clickSend(node: AccessibilityNodeInfo): Boolean {
+        val viewId = node.viewIdResourceName.orEmpty().lowercase()
         val description = node.contentDescription?.toString().orEmpty().lowercase()
         val text = node.text?.toString().orEmpty().lowercase()
-        val looksLikeSend = description == "enviar" || description == "send" ||
-            text == "enviar" || text == "send" ||
-            (description.contains("enviar") && node.isClickable) ||
-            (description.contains("send") && node.isClickable)
 
-        if (looksLikeSend && node.isClickable) {
-            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        val looksLikeSend =
+            viewId.endsWith(":id/send") ||
+            viewId.contains("send_button") ||
+            description == "enviar" || description == "send" ||
+            description.startsWith("enviar") || description.startsWith("send") ||
+            text == "enviar" || text == "send"
+
+        if (looksLikeSend) {
+            var clickable: AccessibilityNodeInfo? = node
+            while (clickable != null) {
+                if (clickable.isClickable && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    return true
+                }
+                clickable = clickable.parent
+            }
         }
 
         for (i in 0 until node.childCount) {
@@ -80,4 +140,10 @@ class WhatsAppAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
+
+    override fun onDestroy() {
+        connected = false
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
 }
