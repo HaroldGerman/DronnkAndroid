@@ -20,7 +20,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
-import android.provider.ContactsContract
 import android.service.voice.VoiceInteractionService
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -33,6 +32,9 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.german.dronnk.R
 import com.german.dronnk.ai.DronnkBrain
+import com.german.dronnk.apps.AppResolver
+import com.german.dronnk.contacts.ContactMatcher
+import com.german.dronnk.media.MediaRouter
 import com.german.dronnk.ui.MainActivity
 import com.german.dronnk.youtube.YouTubeSearchClient
 import kotlinx.coroutines.CoroutineScope
@@ -53,8 +55,8 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         private const val CHANNEL_ID = "dronnk_hands_free"
         private const val NOTIFICATION_ID = 2101
         private const val COMMAND_TIMEOUT_MS = 8_000L
-        private const val TTS_UTTERANCE_ID = "hands-free-response"
         private const val MONITOR_RESUME_MS = 700L
+        private const val TTS_UTTERANCE_ID = "hands-free-response"
     }
 
     private var recognizer: SpeechRecognizer? = null
@@ -62,16 +64,21 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     private var listening = false
     private var awaitingCommand = false
     private var isSpeaking = false
+
     private val handler = Handler(Looper.getMainLooper())
-    private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val youtubeSearch by lazy { YouTubeSearchClient(this) }
+    private var wakeLock: PowerManager.WakeLock? = null
+
     private val brain by lazy { DronnkBrain() }
+    private val youtubeSearch by lazy { YouTubeSearchClient(this) }
+    private val contacts by lazy { ContactMatcher(this) }
+    private val apps by lazy { AppResolver(this) }
+    private val mediaRouter by lazy { MediaRouter(this) }
     private val voiceMonitor by lazy {
         VoiceActivityMonitor(this) {
             handler.post {
                 if (isEnabled() && !isSpeaking && !listening) {
-                    handler.postDelayed(::startRecognitionFromVoiceActivity, 300L)
+                    handler.postDelayed(::startRecognitionFromVoiceActivity, 250L)
                 }
             }
         }
@@ -102,7 +109,6 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             disableAndStop()
             return START_NOT_STICKY
         }
-
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, true).apply()
         startAsForeground("Manos libres activo · esperando voz")
         ensureRecognizer()
@@ -120,14 +126,12 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
 
     private fun startAsForeground(text: String) {
         val openApp = PendingIntent.getActivity(
-            this,
-            1,
+            this, 1,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val stop = PendingIntent.getService(
-            this,
-            2,
+            this, 2,
             Intent(this, HandsFreeService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -141,9 +145,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             .addAction(0, "Detener", stop)
             .build()
 
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        } else 0
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
     }
 
@@ -152,74 +154,55 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     private fun ensureRecognizer() {
         if (recognizer != null) return
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            updateNotification("El reconocimiento de voz no está disponible")
+            updateNotification("Reconocimiento de voz no disponible")
             return
         }
-
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
                     listening = true
                     updateNotification(if (awaitingCommand) "Dronnk activado · di tu orden" else "Escuchando…")
                 }
-
                 override fun onBeginningOfSpeech() = Unit
                 override fun onRmsChanged(rmsdB: Float) = Unit
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
                 override fun onEndOfSpeech() { listening = false }
-
                 override fun onError(error: Int) {
                     listening = false
                     handler.removeCallbacks(commandTimeout)
                     if (!isEnabled() || isSpeaking) return
                     awaitingCommand = false
-                    updateNotification("Manos libres activo · esperando voz")
                     handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
                 }
-
                 override fun onResults(results: Bundle?) {
                     listening = false
                     handler.removeCallbacks(commandTimeout)
                     if (!isEnabled()) return
-
-                    val candidates = results
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        .orEmpty()
-                        .map(String::trim)
-                        .filter(String::isNotBlank)
-
-                    if (candidates.isEmpty()) {
-                        awaitingCommand = false
-                        handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-                    } else {
-                        processRecognitionCandidates(candidates)
-                    }
+                    val candidates = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        .orEmpty().map(String::trim).filter(String::isNotBlank)
+                    if (candidates.isEmpty()) handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+                    else processRecognitionCandidates(candidates)
                 }
-
                 override fun onPartialResults(partialResults: Bundle?) {
-                    val partial = partialResults
-                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        ?.trim()
-                        .orEmpty()
+                    val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()?.trim().orEmpty()
                     if (partial.isNotBlank() && findWakeWord(partial) != null) {
                         updateNotification("Dronnk detectado · termina la orden")
                     }
                 }
-
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
         }
     }
 
-    private fun recognitionIntent(commandMode: Boolean): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    private fun recognitionIntent(commandMode: Boolean) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-PE")
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-PE")
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 1_500L else 1_900L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 1_000L else 1_300L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 1500L else 1900L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, if (commandMode) 1000L else 1300L)
     }
 
     private fun startVoiceMonitoring() {
@@ -237,7 +220,6 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             return
         }
         awaitingCommand = false
-        updateNotification("Escuchando…")
         runCatching { engine.startListening(recognitionIntent(false)) }
             .onFailure { handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS) }
     }
@@ -250,7 +232,6 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         listening = false
         awaitingCommand = true
         updateNotification("Dronnk activado · di tu orden")
-
         handler.postDelayed({
             if (!isEnabled() || !awaitingCommand || isSpeaking) return@postDelayed
             ensureRecognizer()
@@ -276,30 +257,17 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
     private fun processRecognitionCandidates(candidates: List<String>) {
         if (awaitingCommand) {
             awaitingCommand = false
-            val command = candidates
-                .map(::stripWakeWordPrefix)
-                .firstOrNull { looksLikeSupportedCommand(it) }
-                ?: stripWakeWordPrefix(candidates.first())
-
-            if (command.isBlank()) handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-            else executeCommand(command)
+            executeCommand(stripWakeWordPrefix(candidates.first()))
             return
         }
-
         val withWakeWord = candidates.firstOrNull { findWakeWord(it) != null }
         if (withWakeWord != null) {
-            val match = findWakeWord(withWakeWord) ?: run {
-                handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-                return
-            }
+            val match = findWakeWord(withWakeWord) ?: return
             val rest = withWakeWord.substring(match.last + 1).trim(' ', ',', '.', ':', ';', '-')
             if (rest.isBlank()) startCommandListening() else executeCommand(rest)
             return
         }
-
-        val directCommand = candidates.firstOrNull { looksLikeSupportedCommand(it) }
-        if (directCommand != null) executeCommand(directCommand)
-        else handleIntelligentCommand(candidates.first())
+        executeCommand(candidates.first())
     }
 
     private fun stripWakeWordPrefix(text: String): String {
@@ -308,23 +276,13 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         return text.substring(match.last + 1).trim(' ', ',', '.', ':', ';', '-')
     }
 
-    private fun looksLikeSupportedCommand(text: String): Boolean {
-        val q = text.lowercase(Locale.getDefault()).trim()
-        return q.contains("linterna") || q.contains("volumen") || q.startsWith("llama") ||
-            q.contains("whatsapp") || Regex("\\bwsp\\b").containsMatchIn(q) ||
-            q.startsWith("pon ") || q.startsWith("reproduce") || q.startsWith("abre ") ||
-            q.contains("pausa") || q.contains("reanuda") || q.contains("continúa") ||
-            q.contains("continua") || q.contains("siguiente") || q.contains("anterior") ||
-            q.contains("batería") || q.contains("bateria") || q.contains("desactiva manos libres")
-    }
-
     private fun executeCommand(command: String) {
-        awaitingCommand = false
-        handler.removeCallbacks(commandTimeout)
-        val cleanCommand = stripWakeWordPrefix(command)
-        val q = cleanCommand.lowercase(Locale.getDefault()).trim()
-        updateNotification("Procesando: $cleanCommand")
-
+        val clean = stripWakeWordPrefix(command)
+        val q = clean.lowercase(Locale.getDefault()).trim()
+        if (q.isBlank()) {
+            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            return
+        }
         when {
             (q.contains("apaga") || q.contains("desactiva")) && q.contains("linterna") -> setTorch(false)
             (q.contains("enciende") || q.contains("prende") || q.contains("activa")) && q.contains("linterna") -> setTorch(true)
@@ -332,67 +290,169 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             q.contains("baja") && q.contains("volumen") -> changeVolume(AudioManager.ADJUST_LOWER, "Bajando el volumen.")
             q.contains("silencia") || q.contains("silencio") -> changeVolume(AudioManager.ADJUST_MUTE, "Silenciando.")
             q == "pausa" || q.contains("pausa la música") || q.contains("pausa la musica") -> mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE, "Pausando reproducción.")
-            q == "reanuda" || q == "continúa" || q == "continua" || q.contains("reanuda la música") || q.contains("continúa la música") || q.contains("continua la musica") -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY, "Reanudando reproducción.")
-            q.contains("siguiente canción") || q.contains("siguiente cancion") || q == "siguiente" -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, "Pasando a la siguiente canción.")
-            q.contains("canción anterior") || q.contains("cancion anterior") || q == "anterior" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Volviendo a la canción anterior.")
-            q.startsWith("llama a ") || q.startsWith("llamar a ") -> callContact(cleanCommand.substringAfter(" a ").trim())
-            isWhatsAppChatCommand(q) -> openWhatsAppChat(cleanCommand)
-            q.startsWith("pon ") || q.startsWith("reproduce ") || q.startsWith("reproducir ") -> playMusic(cleanCommand)
-            q == "abre whatsapp" || q == "abre wsp" -> openPackage("com.whatsapp", "WhatsApp")
-            q.startsWith("abre ") -> openApp(cleanCommand.substringAfter(" ").trim())
-            q.contains("batería") || q.contains("bateria") -> {
-                val manager = getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
-                speakAndResume("Tienes ${manager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
-            }
+            q == "reanuda" || q == "continúa" || q == "continua" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY, "Reanudando reproducción.")
+            q.contains("siguiente") -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, "Siguiente canción.")
+            q.contains("anterior") -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Canción anterior.")
+            q.contains("batería") || q.contains("bateria") -> battery()
             q.contains("detén dronnk") || q.contains("deten dronnk") || q.contains("desactiva manos libres") -> disableAndStop()
-            else -> handleIntelligentCommand(cleanCommand)
+            else -> handleIntelligentCommand(clean)
         }
     }
 
     private fun handleIntelligentCommand(text: String) {
         if (!brain.isConfigured()) {
-            updateNotification("IA lista para configurar · esperando voz")
-            handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
+            speakAndResume("La IA de Dronnk no está configurada.")
             return
         }
-
         voiceMonitor.stop()
         updateNotification("Pensando…")
         serviceScope.launch {
             val result = withContext(Dispatchers.IO) { brain.interpret(text) }
             result.onSuccess(::executeBrainDecision)
-                .onFailure {
-                    updateNotification("IA no disponible · esperando voz")
-                    handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-                }
+                .onFailure { speakAndResume("No pude interpretar esa orden ahora mismo.") }
         }
     }
 
     private fun executeBrainDecision(decision: DronnkBrain.Decision) {
         when (decision.action) {
-            "OPEN_APP" -> openApp(decision.value)
-            "CALL_CONTACT" -> callContact(decision.value)
-            "WHATSAPP_CHAT" -> openWhatsAppChat("chat de ${decision.value}")
-            "PLAY_YOUTUBE" -> playYouTubeVideo(decision.value)
-            "SPOTIFY_SEARCH" -> openExternal(
-                Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:${Uri.encode(decision.value)}")).setPackage("com.spotify.music"),
-                decision.reply.ifBlank { "Abriendo ${decision.value} en Spotify." }
-            )
+            "OPEN_APP" -> openApp(decision.app.ifBlank { decision.value })
+            "CALL_CONTACT" -> callContact(decision.target.ifBlank { decision.value })
+            "CALL_IN_APP" -> openApp(decision.app)
+            "OPEN_CHAT" -> openChat(decision.app, decision.target)
+            "PREPARE_MESSAGE" -> prepareMessage(decision.app, decision.target, decision.message)
+            "PLAY_MEDIA" -> playMedia(decision.app, decision.value)
             "TORCH_ON" -> setTorch(true)
             "TORCH_OFF" -> setTorch(false)
             "MEDIA_PAUSE" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE, decision.reply.ifBlank { "Pausando reproducción." })
             "MEDIA_PLAY" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY, decision.reply.ifBlank { "Reanudando reproducción." })
-            "MEDIA_NEXT" -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, decision.reply.ifBlank { "Siguiente." })
-            "MEDIA_PREVIOUS" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, decision.reply.ifBlank { "Anterior." })
-            "BATTERY" -> {
-                val manager = getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
-                speakAndResume("Tienes ${manager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
-            }
-            else -> {
-                if (decision.reply.isNotBlank()) speakAndResume(decision.reply)
-                else handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-            }
+            "MEDIA_NEXT" -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, decision.reply.ifBlank { "Siguiente canción." })
+            "MEDIA_PREVIOUS" -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, decision.reply.ifBlank { "Canción anterior." })
+            "BATTERY" -> battery()
+            else -> if (decision.reply.isNotBlank()) speakAndResume(decision.reply) else handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
         }
+    }
+
+    private fun playMedia(requestedApp: String, query: String) {
+        val app = requestedApp.ifBlank { "youtube" }
+        val normalized = app.lowercase(Locale.getDefault())
+        if (normalized.contains("youtube")) {
+            playYouTubeVideo(query)
+            return
+        }
+        val plan = mediaRouter.plan(query.ifBlank { "música" }, app)
+        if (plan == null) {
+            speakAndResume("No encontré una aplicación llamada $app.")
+            return
+        }
+        val response = if (plan.directPlaybackRequested) {
+            "Reproduciendo ${query.ifBlank { "música" }} en ${plan.appLabel}."
+        } else {
+            "Abriendo ${plan.appLabel} para ${query.ifBlank { "música" }}."
+        }
+        openExternal(plan.intent, response)
+    }
+
+    private fun playYouTubeVideo(query: String) {
+        val clean = query.ifBlank { "música" }
+        serviceScope.launch {
+            val result = withContext(Dispatchers.IO) { youtubeSearch.findFirstVideoId(clean) }
+            result.onSuccess { videoId ->
+                val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$videoId")).setPackage("com.google.android.youtube")
+                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
+                val target = if (appIntent.resolveActivity(packageManager) != null) appIntent else fallback
+                openExternal(target, "Reproduciendo $clean en YouTube.")
+            }.onFailure { speakAndResume("No pude encontrar $clean en YouTube.") }
+        }
+    }
+
+    private fun callContact(target: String) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            speakAndResume("Necesito permiso de contactos.")
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            speakAndResume("Necesito permiso de teléfono.")
+            return
+        }
+        val direct = target.filter { it.isDigit() || it == '+' }
+        val pair = if (direct.length >= 5 && direct.length >= target.length - 2) direct to target else {
+            val match = contacts.findBest(target)
+            if (match == null) {
+                speakAndResume("No encontré un contacto parecido a $target.")
+                return
+            }
+            match.phone to match.name
+        }
+        openExternal(Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(pair.first)}")), "Llamando a ${pair.second}.")
+    }
+
+    private fun openChat(appName: String, target: String) {
+        val app = appName.ifBlank { "whatsapp" }
+        if (app.lowercase(Locale.getDefault()).contains("whatsapp")) {
+            openWhatsApp(target, "")
+            return
+        }
+        val match = apps.find(app)
+        val intent = match?.packageName?.let(packageManager::getLaunchIntentForPackage)
+        if (intent == null) speakAndResume("No encontré $app instalado.")
+        else openExternal(intent, "Abriendo ${match.label}. Busca a $target para continuar.")
+    }
+
+    private fun prepareMessage(appName: String, target: String, message: String) {
+        val app = appName.ifBlank { "whatsapp" }
+        if (app == "default" || app.lowercase(Locale.getDefault()).contains("whatsapp")) {
+            openWhatsApp(target, message)
+            return
+        }
+        val match = apps.find(app)
+        if (match == null) {
+            speakAndResume("No encontré $app instalado.")
+            return
+        }
+        val share = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, message)
+            setPackage(match.packageName)
+        }
+        if (share.resolveActivity(packageManager) != null) {
+            openExternal(share, "Preparando el mensaje para $target en ${match.label}.")
+        } else {
+            val launch = packageManager.getLaunchIntentForPackage(match.packageName)
+            if (launch == null) speakAndResume("No pude abrir ${match.label}.")
+            else openExternal(launch, "Abriendo ${match.label}. El mensaje para $target está preparado por Dronnk.")
+        }
+    }
+
+    private fun openWhatsApp(target: String, message: String) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            speakAndResume("Necesito permiso de contactos.")
+            return
+        }
+        val match = contacts.findBest(target)
+        if (match == null) {
+            speakAndResume("No encontré un contacto parecido a $target.")
+            return
+        }
+        var digits = match.phone.filter(Char::isDigit)
+        if (!match.phone.trim().startsWith("+") && digits.length == 9) digits = "51$digits"
+        val uri = Uri.Builder().scheme("https").authority("wa.me").appendPath(digits)
+            .apply { if (message.isNotBlank()) appendQueryParameter("text", message) }.build()
+        val normal = Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp")
+        val business = Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp.w4b")
+        val intent = when {
+            normal.resolveActivity(packageManager) != null -> normal
+            business.resolveActivity(packageManager) != null -> business
+            else -> null
+        }
+        if (intent == null) speakAndResume("No encontré WhatsApp instalado.")
+        else openExternal(intent, if (message.isBlank()) "Abriendo el chat de ${match.name}." else "Preparando tu mensaje para ${match.name}.")
+    }
+
+    private fun openApp(name: String) {
+        val match = apps.find(name)
+        val intent = match?.packageName?.let(packageManager::getLaunchIntentForPackage)
+        if (intent == null) speakAndResume("No encontré una app llamada $name.")
+        else openExternal(intent, "Abriendo ${match.label}.")
     }
 
     private fun setTorch(enabled: Boolean) {
@@ -401,11 +461,7 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             return
         }
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
-        val id = runCatching {
-            manager.cameraIdList.firstOrNull {
-                manager.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-            }
-        }.getOrNull()
+        val id = runCatching { manager.cameraIdList.firstOrNull { manager.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true } }.getOrNull()
         if (id == null) speakAndResume("No encontré una linterna disponible.")
         else runCatching { manager.setTorchMode(id, enabled) }
             .onSuccess { speakAndResume(if (enabled) "Linterna encendida." else "Linterna apagada.") }
@@ -428,181 +484,25 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
             .onFailure { speakAndResume("No pude controlar la reproducción activa.") }
     }
 
-    private fun playMusic(command: String) {
-        val q = command.lowercase(Locale.getDefault())
-        val query = command
-            .replace(Regex("(?i)^(pon|reproduce|reproducir)\\s+"), "")
-            .replace(Regex("(?i)\\s+(en|desde)\\s+(spotify|youtube music|youtube).*$"), "")
-            .replace(Regex("(?i)^m[uú]sica\\s*"), "")
-            .trim()
-
-        if (q.contains("youtube music")) {
-            openExternal(
-                Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com/search?q=${Uri.encode(query)}")).setPackage("com.google.android.apps.youtube.music"),
-                "Abriendo la búsqueda de $query en YouTube Music."
-            )
-            return
-        }
-        if (q.contains("youtube") && !q.contains("youtube music")) {
-            playYouTubeVideo(query)
-            return
-        }
-        val clean = query.ifBlank { "música" }
-        openExternal(
-            Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:${Uri.encode(clean)}")).setPackage("com.spotify.music"),
-            "Abriendo la búsqueda de $clean en Spotify."
-        )
-    }
-
-    private fun playYouTubeVideo(query: String) {
-        val clean = query.ifBlank { "música" }
-        updateNotification("Buscando $clean en YouTube…")
-        serviceScope.launch {
-            val result = withContext(Dispatchers.IO) { youtubeSearch.findFirstVideoId(clean) }
-            result.onSuccess { videoId ->
-                val appIntent = Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$videoId")).setPackage("com.google.android.youtube")
-                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
-                val target = if (appIntent.resolveActivity(packageManager) != null) appIntent else fallback
-                openExternal(target, "Reproduciendo $clean en YouTube.")
-            }.onFailure {
-                speakAndResume("No pude encontrar ese video en YouTube. Revisa la configuración de la API de YouTube.")
-            }
-        }
-    }
-
-    private fun callContact(target: String) {
-        val direct = target.filter { it.isDigit() || it == '+' }
-        if (direct.length >= 5 && direct.length >= target.length - 2) {
-            placeDirectCall(direct, direct)
-            return
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            speakAndResume("Necesito permiso de contactos. Abre Dronnk para concederlo.")
-            return
-        }
-        val contact = findContact(target)
-        if (contact == null) speakAndResume("No encontré a $target en tus contactos.")
-        else placeDirectCall(contact.second, contact.first)
-    }
-
-    private fun placeDirectCall(number: String, label: String) {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            speakAndResume("Necesito permiso de teléfono. Abre Dronnk y haz una llamada una vez para concederlo.")
-            return
-        }
-        openExternal(Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(number)}")), "Llamando a $label.")
-    }
-
-    private fun isWhatsAppChatCommand(q: String): Boolean {
-        val mentions = q.contains("whatsapp") || Regex("\\bwsp\\b").containsMatchIn(q)
-        val chat = q.contains("chat") || q.contains("conversación") || q.contains("conversacion") || q.contains("mensaje")
-        return q.startsWith("abre el chat de ") || q.startsWith("entra al chat de ") || (mentions && chat)
-    }
-
-    private fun openWhatsAppChat(command: String) {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            speakAndResume("Necesito permiso de contactos. Abre Dronnk para concederlo.")
-            return
-        }
-        val patterns = listOf(
-            Regex("(?i)(?:chat|conversaci[oó]n)\\s+(?:de|con)\\s+(.+?)(?:\\s+en\\s+(?:whatsapp|wsp))?$"),
-            Regex("(?i)(?:whatsapp|wsp)\\s+(?:a|con)\\s+(.+)$")
-        )
-        val name = patterns.firstNotNullOfOrNull {
-            it.find(command)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotBlank)
-        }
-        if (name.isNullOrBlank()) {
-            openPackage("com.whatsapp", "WhatsApp")
-            return
-        }
-        val contact = findContact(name)
-        if (contact == null) {
-            speakAndResume("No encontré a $name en tus contactos.")
-            return
-        }
-        var digits = contact.second.filter(Char::isDigit)
-        if (!contact.second.trim().startsWith("+") && digits.length == 9) digits = "51$digits"
-        openExternal(
-            Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$digits")).setPackage("com.whatsapp"),
-            "Abriendo el chat de ${contact.first}."
-        )
-    }
-
-    private fun findContact(name: String): Pair<String, String>? {
-        val projection = arrayOf(
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-            ContactsContract.CommonDataKinds.Phone.NUMBER
-        )
-        contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            projection,
-            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
-            arrayOf("%$name%"),
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-        )?.use { if (it.moveToFirst()) return it.getString(0) to it.getString(1) }
-        return null
-    }
-
-    private fun openApp(name: String) {
-        val aliases = mapOf("wsp" to "whatsapp", "yt" to "youtube", "spoty" to "spotify")
-        val normalized = aliases[name.lowercase(Locale.getDefault())] ?: name.lowercase(Locale.getDefault())
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val match = packageManager.queryIntentActivities(launcher, 0).firstOrNull {
-            it.loadLabel(packageManager).toString().lowercase(Locale.getDefault()).contains(normalized)
-        }
-        val intent = match?.activityInfo?.packageName?.let(packageManager::getLaunchIntentForPackage)
-        if (intent == null) speakAndResume("No encontré una app llamada $name.")
-        else openExternal(intent, "Abriendo ${match.loadLabel(packageManager)}.")
-    }
-
-    private fun openPackage(packageName: String, label: String) {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
-        if (intent == null) speakAndResume("No encontré $label instalado.")
-        else openExternal(intent, "Abriendo $label.")
+    private fun battery() {
+        val manager = getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
+        speakAndResume("Tienes ${manager.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)} por ciento de batería.")
     }
 
     private fun openExternal(intent: Intent, response: String) {
         voiceMonitor.stop()
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-
         val assistantComponent = ComponentName(this, DronnkVoiceInteractionService::class.java)
-        val dronnkIsActiveAssistant = VoiceInteractionService.isActiveService(this, assistantComponent)
-
-        if (dronnkIsActiveAssistant) {
-            val launched = runCatching {
-                startActivity(intent)
-                true
-            }.getOrDefault(false)
-            if (launched) {
-                speakAndResume(response)
-                return
-            }
+        val active = VoiceInteractionService.isActiveService(this, assistantComponent)
+        if (active && runCatching { startActivity(intent); true }.getOrDefault(false)) {
+            speakAndResume(response)
+            return
         }
-
         if (DronnkVoiceInteractionService.launchExternal(intent)) {
             speakAndResume(response)
             return
         }
-
-        postUnlockNotification(intent, response)
-        speakAndResume("No pude abrir la aplicación automáticamente. Toca la notificación de Dronnk para completar la acción.")
-    }
-
-    private fun postUnlockNotification(intent: Intent, text: String) {
-        val pending = PendingIntent.getActivity(
-            this,
-            99,
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.dronnk_assistant_icon)
-            .setContentTitle("Dronnk necesita abrir una app")
-            .setContentText(text)
-            .setContentIntent(pending)
-            .setAutoCancel(true)
-            .build()
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(2102, notification)
+        speakAndResume("Entendí la acción, pero Android no permitió abrir la aplicación automáticamente.")
     }
 
     private fun speakAndResume(message: String) {
@@ -613,23 +513,19 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         awaitingCommand = false
         isSpeaking = true
         updateNotification(message)
-
         val engine = tts
         if (engine == null) {
             isSpeaking = false
             handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
             return
         }
-
-        val result = engine.speak(message, TextToSpeech.QUEUE_FLUSH, null, TTS_UTTERANCE_ID)
-        if (result == TextToSpeech.ERROR) {
+        if (engine.speak(message, TextToSpeech.QUEUE_FLUSH, null, TTS_UTTERANCE_ID) == TextToSpeech.ERROR) {
             isSpeaking = false
             handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
         }
     }
 
-    private fun isEnabled(): Boolean =
-        getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+    private fun isEnabled() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
 
     private fun disableAndStop() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, false).apply()
@@ -642,12 +538,8 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Dronnk manos libres",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Mantiene Dronnk disponible por voz incluso con la pantalla bloqueada."
+            val channel = NotificationChannel(CHANNEL_ID, "Dronnk manos libres", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Mantiene Dronnk disponible por voz."
                 enableLights(false)
                 lightColor = Color.RED
             }
@@ -660,25 +552,18 @@ class HandsFreeService : Service(), TextToSpeech.OnInitListener {
         tts?.language = Locale("es", "PE")
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-
             override fun onDone(utteranceId: String?) {
                 if (utteranceId != TTS_UTTERANCE_ID) return
                 isSpeaking = false
                 handler.postDelayed({ if (isEnabled()) startVoiceMonitoring() }, MONITOR_RESUME_MS)
             }
-
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
                 if (utteranceId != TTS_UTTERANCE_ID) return
                 isSpeaking = false
                 handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
             }
-
-            override fun onError(utteranceId: String?, errorCode: Int) {
-                if (utteranceId != TTS_UTTERANCE_ID) return
-                isSpeaking = false
-                handler.postDelayed(::startVoiceMonitoring, MONITOR_RESUME_MS)
-            }
+            override fun onError(utteranceId: String?, errorCode: Int) = onError(utteranceId)
         })
     }
 
