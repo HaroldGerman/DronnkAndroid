@@ -14,6 +14,7 @@ class DronnkBrain {
 
     data class Decision(
         val action: String,
+        val app: String = "",
         val value: String = "",
         val target: String = "",
         val message: String = "",
@@ -29,10 +30,9 @@ class DronnkBrain {
 
     private val history = ArrayDeque<Turn>()
     private val allowedActions = setOf(
-        "OPEN_APP", "CALL_CONTACT", "WHATSAPP_CHAT", "WHATSAPP_MESSAGE",
+        "OPEN_APP", "CALL_CONTACT", "CALL_IN_APP", "OPEN_CHAT", "PREPARE_MESSAGE",
         "PLAY_YOUTUBE", "SPOTIFY_SEARCH", "TORCH_ON", "TORCH_OFF",
-        "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS",
-        "BATTERY", "NONE"
+        "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS", "BATTERY", "NONE"
     )
 
     fun isConfigured(): Boolean = BuildConfig.GEMINI_API_KEY.isNotBlank()
@@ -43,32 +43,32 @@ class DronnkBrain {
         require(message.isNotBlank()) { "Mensaje vacío" }
 
         val system = """
-            Eres Dronnk, un asistente Android en español. Tu trabajo es interpretar órdenes naturales y decidir qué herramienta del teléfono debe usar Dronnk.
-            Devuelve SOLO JSON válido, sin markdown ni texto adicional.
+            Eres Dronnk, un asistente Android general. Interpreta órdenes naturales y decide qué herramienta debe usar Dronnk.
+            Devuelve SOLO JSON válido, sin markdown ni texto extra.
 
             Formato exacto:
-            {"action":"...","value":"...","target":"...","message":"...","reply":"..."}
+            {"action":"...","app":"...","value":"...","target":"...","message":"...","reply":"..."}
 
             Acciones permitidas:
-            OPEN_APP, CALL_CONTACT, WHATSAPP_CHAT, WHATSAPP_MESSAGE,
+            OPEN_APP, CALL_CONTACT, CALL_IN_APP, OPEN_CHAT, PREPARE_MESSAGE,
             PLAY_YOUTUBE, SPOTIFY_SEARCH, TORCH_ON, TORCH_OFF,
-            MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS,
-            BATTERY, NONE.
+            MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS, BATTERY, NONE.
 
             Reglas:
-            - OPEN_APP: value = nombre de la app.
-            - CALL_CONTACT: target = nombre o número de la persona.
-            - WHATSAPP_CHAT: target = nombre de la persona.
-            - WHATSAPP_MESSAGE: target = persona y message = texto que el usuario quiere enviar.
-            - PLAY_YOUTUBE y SPOTIFY_SEARCH: value = búsqueda musical o de video.
-            - NONE: úsalo para conversación o preguntas que no necesitan una acción del teléfono.
-            - Si el usuario dice “escríbele”, “dile por WhatsApp”, “mándale un mensaje”, “avísale”, etc., usa WHATSAPP_MESSAGE.
-            - No corrijas nombres propios agresivamente. Conserva el nombre tal como lo dijo el usuario; Android resolverá variantes fonéticas contra sus contactos.
-            - Si el usuario habla indirectamente, infiere la acción más razonable. Ejemplo: “está oscuro” puede ser TORCH_ON.
-            - No inventes acciones fuera de la lista.
-            - No afirmes que una acción ya ocurrió; solo decide qué debe hacer Dronnk.
-            - reply debe ser breve y natural.
-            - Usa el contexto reciente para frases como “sí”, “esa”, “hazlo”, “a ella”, “pausa eso”.
+            - OPEN_APP: app o value = nombre de la aplicación.
+            - CALL_CONTACT: target = persona o número para llamada telefónica normal.
+            - CALL_IN_APP: app = aplicación solicitada; target = persona.
+            - OPEN_CHAT: app = aplicación; target = persona/chat.
+            - PREPARE_MESSAGE: app = aplicación; target = destinatario; message = texto exacto que quiere comunicar.
+            - Si no se menciona una app para un mensaje, app="default".
+            - PLAY_YOUTUBE y SPOTIFY_SEARCH: value = búsqueda.
+            - NONE: conversación o pregunta sin acción del teléfono.
+            - “escríbele”, “dile”, “mándale”, “avísale”, “respóndele” significan PREPARE_MESSAGE.
+            - IG/insta significa Instagram. FB puede ser Facebook/Messenger según contexto.
+            - Conserva nombres propios como fueron reconocidos; Android hará coincidencia fonética con contactos.
+            - Usa contexto reciente para “a ella”, “hazlo”, “la misma”, “respóndele”, etc.
+            - No inventes acciones fuera de la lista y no afirmes que ya se ejecutaron.
+            - reply debe ser breve.
         """.trimIndent()
 
         val contents = JSONArray()
@@ -79,16 +79,14 @@ class DronnkBrain {
             })
             contents.put(JSONObject().apply {
                 put("role", "model")
-                put("parts", JSONArray().put(JSONObject().put(
-                    "text",
-                    JSONObject().apply {
-                        put("action", turn.decision.action)
-                        put("value", turn.decision.value)
-                        put("target", turn.decision.target)
-                        put("message", turn.decision.message)
-                        put("reply", turn.decision.reply)
-                    }.toString()
-                )))
+                put("parts", JSONArray().put(JSONObject().put("text", JSONObject().apply {
+                    put("action", turn.decision.action)
+                    put("app", turn.decision.app)
+                    put("value", turn.decision.value)
+                    put("target", turn.decision.target)
+                    put("message", turn.decision.message)
+                    put("reply", turn.decision.reply)
+                }.toString())))
             })
         }
         contents.put(JSONObject().apply {
@@ -97,9 +95,7 @@ class DronnkBrain {
         })
 
         val payload = JSONObject().apply {
-            put("systemInstruction", JSONObject().put(
-                "parts", JSONArray().put(JSONObject().put("text", system))
-            ))
+            put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
             put("contents", contents)
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
@@ -115,29 +111,20 @@ class DronnkBrain {
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("Gemini HTTP ${response.code}")
-            val body = response.body?.string().orEmpty()
-            val root = JSONObject(body)
-            val text = root
-                .getJSONArray("candidates")
-                .getJSONObject(0)
-                .getJSONObject("content")
-                .getJSONArray("parts")
-                .getJSONObject(0)
-                .getString("text")
-                .trim()
-
+            val root = JSONObject(response.body?.string().orEmpty())
+            val text = root.getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                .getString("text").trim()
             val json = JSONObject(text)
-            val action = json.optString("action", "NONE").uppercase().let {
-                if (it in allowedActions) it else "NONE"
-            }
+            val action = json.optString("action", "NONE").uppercase().let { if (it in allowedActions) it else "NONE" }
             val decision = Decision(
                 action = action,
+                app = json.optString("app", "").trim(),
                 value = json.optString("value", "").trim(),
                 target = json.optString("target", "").trim(),
                 message = json.optString("message", "").trim(),
                 reply = json.optString("reply", "").trim()
             )
-
             history.addLast(Turn(message, decision))
             while (history.size > 6) history.removeFirst()
             decision
