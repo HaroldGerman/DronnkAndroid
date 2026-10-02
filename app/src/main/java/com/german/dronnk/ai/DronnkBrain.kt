@@ -25,7 +25,7 @@ class DronnkBrain {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
     private val history = ArrayDeque<Turn>()
@@ -39,36 +39,37 @@ class DronnkBrain {
 
     @Synchronized
     fun interpret(message: String): Result<Decision> = runCatching {
-        require(BuildConfig.GEMINI_API_KEY.isNotBlank()) { "Gemini API key no configurada" }
         require(message.isNotBlank()) { "Mensaje vacío" }
 
+        deterministicDecision(message)?.let { decision ->
+            remember(message, decision)
+            return@runCatching decision
+        }
+
+        require(BuildConfig.GEMINI_API_KEY.isNotBlank()) { "Gemini API key no configurada" }
+
         val system = """
-            Eres Dronnk, un asistente Android general. Interpreta órdenes naturales y decide qué herramienta debe usar Dronnk.
-            Devuelve SOLO JSON válido, sin markdown ni texto extra.
+            Eres Dronnk, el cerebro de un asistente Android general. Convierte lenguaje natural en UNA acción estructurada.
+            No estás especializado en YouTube: debes respetar siempre la aplicación que el usuario mencione.
 
-            Formato exacto:
-            {"action":"...","app":"...","value":"...","target":"...","message":"...","reply":"..."}
+            Acciones:
+            OPEN_APP: app = aplicación.
+            CALL_CONTACT: target = persona/número para llamada normal.
+            CALL_IN_APP: app = aplicación y target = persona.
+            OPEN_CHAT: app = aplicación y target = persona/chat.
+            PREPARE_MESSAGE: app = aplicación, target = destinatario, message = texto exacto a comunicar.
+            PLAY_MEDIA: app = aplicación solicitada, value = canción/artista/podcast/video/búsqueda.
+            TORCH_ON, TORCH_OFF, MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS, BATTERY.
+            NONE: conversación o pregunta sin acción del teléfono; responde en reply.
 
-            Acciones permitidas:
-            OPEN_APP, CALL_CONTACT, CALL_IN_APP, OPEN_CHAT, PREPARE_MESSAGE,
-            PLAY_MEDIA, TORCH_ON, TORCH_OFF,
-            MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS, BATTERY, NONE.
-
-            Reglas:
-            - OPEN_APP: app o value = nombre de la aplicación.
-            - CALL_CONTACT: target = persona o número para llamada telefónica normal.
-            - CALL_IN_APP: app = aplicación solicitada; target = persona.
-            - OPEN_CHAT: app = aplicación; target = persona/chat.
-            - PREPARE_MESSAGE: app = aplicación; target = destinatario; message = texto exacto que quiere comunicar.
-            - PLAY_MEDIA: app = aplicación donde se debe reproducir; value = canción, artista, podcast, video o búsqueda. Nunca cambies la app pedida por otra. Si el usuario dice TushNH, app debe ser exactamente TushNH. Si dice YouTube, usa YouTube. Si dice Spotify, usa Spotify.
-            - Si el usuario pide reproducir algo y no menciona app, app="default".
-            - NONE: conversación o pregunta sin acción del teléfono.
-            - “escríbele”, “dile”, “mándale”, “avísale”, “respóndele” significan PREPARE_MESSAGE.
-            - IG/insta significa Instagram. FB puede ser Facebook/Messenger según contexto.
-            - Conserva nombres propios como fueron reconocidos; Android hará coincidencia fonética con contactos.
-            - Usa contexto reciente para “a ella”, “hazlo”, “la misma”, “respóndele”, “ponla ahí”, etc.
-            - No inventes acciones fuera de la lista y no afirmes que ya se ejecutaron.
-            - reply debe ser breve.
+            Reglas estrictas:
+            - Si el usuario dice TushNH, conserva app="TushNH". Nunca lo sustituyas por YouTube.
+            - Si dice Spotify, YouTube, Instagram, WhatsApp, Messenger, Facebook, Lifonk u otra app, conserva esa app.
+            - “pon/reproduce X en Y” siempre es PLAY_MEDIA con value=X y app=Y.
+            - “escríbele/dile/mándale/avísale a X por Y que Z” es PREPARE_MESSAGE con target=X, app=Y, message=Z.
+            - No corrijas nombres propios; Android hará coincidencia fonética con contactos.
+            - Usa el contexto reciente para pronombres y continuaciones.
+            - No afirmes que una acción ya ocurrió.
         """.trimIndent()
 
         val contents = JSONArray()
@@ -79,14 +80,7 @@ class DronnkBrain {
             })
             contents.put(JSONObject().apply {
                 put("role", "model")
-                put("parts", JSONArray().put(JSONObject().put("text", JSONObject().apply {
-                    put("action", turn.decision.action)
-                    put("app", turn.decision.app)
-                    put("value", turn.decision.value)
-                    put("target", turn.decision.target)
-                    put("message", turn.decision.message)
-                    put("reply", turn.decision.reply)
-                }.toString())))
+                put("parts", JSONArray().put(JSONObject().put("text", decisionJson(turn.decision).toString())))
             })
         }
         contents.put(JSONObject().apply {
@@ -94,40 +88,111 @@ class DronnkBrain {
             put("parts", JSONArray().put(JSONObject().put("text", message)))
         })
 
+        val schema = JSONObject().apply {
+            put("type", "object")
+            put("additionalProperties", false)
+            put("properties", JSONObject().apply {
+                put("action", JSONObject().apply {
+                    put("type", "string")
+                    put("enum", JSONArray(allowedActions.toList()))
+                })
+                put("app", JSONObject().put("type", "string"))
+                put("value", JSONObject().put("type", "string"))
+                put("target", JSONObject().put("type", "string"))
+                put("message", JSONObject().put("type", "string"))
+                put("reply", JSONObject().put("type", "string"))
+            })
+            put("required", JSONArray(listOf("action", "app", "value", "target", "message", "reply")))
+        }
+
         val payload = JSONObject().apply {
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
             put("contents", contents)
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
-                put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+                put("responseJsonSchema", schema)
+                put("thinkingConfig", JSONObject().put("thinkingLevel", "medium"))
+                put("temperature", 0.1)
             })
         }
 
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent")
-            .header("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
+        var lastError: Throwable? = null
+        repeat(2) { attempt ->
+            try {
+                val request = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent")
+                    .header("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
+                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("Gemini HTTP ${response.code}")
-            val root = JSONObject(response.body?.string().orEmpty())
-            val text = root.getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
-                .getString("text").trim()
-            val json = JSONObject(text)
-            val action = json.optString("action", "NONE").uppercase().let { if (it in allowedActions) it else "NONE" }
-            val decision = Decision(
-                action = action,
-                app = json.optString("app", "").trim(),
-                value = json.optString("value", "").trim(),
-                target = json.optString("target", "").trim(),
-                message = json.optString("message", "").trim(),
-                reply = json.optString("reply", "").trim()
-            )
-            history.addLast(Turn(message, decision))
-            while (history.size > 6) history.removeFirst()
-            decision
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("Gemini HTTP ${response.code}: ${response.body?.string().orEmpty().take(300)}")
+                    val root = JSONObject(response.body?.string().orEmpty())
+                    val text = root.getJSONArray("candidates").getJSONObject(0)
+                        .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                        .getString("text").trim()
+                    val decision = parseDecision(JSONObject(text))
+                    remember(message, decision)
+                    return@runCatching decision
+                }
+            } catch (t: Throwable) {
+                lastError = t
+                if (attempt == 0) Thread.sleep(180)
+            }
         }
+        throw lastError ?: IllegalStateException("Gemini no devolvió una decisión")
+    }
+
+    private fun deterministicDecision(message: String): Decision? {
+        val text = message.trim()
+
+        Regex("(?i)^(?:pon|reproduce|reproducir)\\s+(.+?)\\s+(?:en|desde)\\s+(.+?)\\s*$")
+            .find(text)?.let { m ->
+                return Decision(
+                    action = "PLAY_MEDIA",
+                    value = m.groupValues[1].trim(),
+                    app = m.groupValues[2].trim()
+                )
+            }
+
+        Regex("(?i)^(?:escr[ií]bele|dile|m[aá]ndale|av[ií]sale)\\s+a\\s+(.+?)\\s+(?:por|en)\\s+(.+?)\\s+(?:que|diciendo)\\s+(.+)$")
+            .find(text)?.let { m ->
+                return Decision(
+                    action = "PREPARE_MESSAGE",
+                    target = m.groupValues[1].trim(),
+                    app = m.groupValues[2].trim(),
+                    message = m.groupValues[3].trim()
+                )
+            }
+
+        return null
+    }
+
+    private fun parseDecision(json: JSONObject): Decision {
+        val action = json.optString("action", "NONE").uppercase().let {
+            if (it in allowedActions) it else "NONE"
+        }
+        return Decision(
+            action = action,
+            app = json.optString("app", "").trim(),
+            value = json.optString("value", "").trim(),
+            target = json.optString("target", "").trim(),
+            message = json.optString("message", "").trim(),
+            reply = json.optString("reply", "").trim()
+        )
+    }
+
+    private fun decisionJson(d: Decision) = JSONObject().apply {
+        put("action", d.action)
+        put("app", d.app)
+        put("value", d.value)
+        put("target", d.target)
+        put("message", d.message)
+        put("reply", d.reply)
+    }
+
+    private fun remember(user: String, decision: Decision) {
+        history.addLast(Turn(user, decision))
+        while (history.size > 6) history.removeFirst()
     }
 }
