@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.german.dronnk.apps.AppResolver
+import com.german.dronnk.automation.WhatsAppAccessibilityService
 import com.german.dronnk.contacts.ContactMatcher
 import java.util.Locale
 
@@ -65,6 +66,10 @@ class CommunicationRouter(private val context: Context) {
         var digits = contact.phone.filter(Char::isDigit)
         if (!contact.phone.trim().startsWith("+") && digits.length == 9) digits = "51$digits"
         if (digits.isBlank()) return null
+
+        if (message.isNotBlank()) {
+            WhatsAppAccessibilityService.queueSend(message)
+        }
 
         val uri = Uri.Builder()
             .scheme("https")
