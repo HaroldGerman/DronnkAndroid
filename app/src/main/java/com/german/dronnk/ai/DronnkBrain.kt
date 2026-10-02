@@ -31,7 +31,7 @@ class DronnkBrain {
     private val history = ArrayDeque<Turn>()
     private val allowedActions = setOf(
         "OPEN_APP", "CALL_CONTACT", "CALL_IN_APP", "OPEN_CHAT", "PREPARE_MESSAGE",
-        "PLAY_YOUTUBE", "SPOTIFY_SEARCH", "TORCH_ON", "TORCH_OFF",
+        "PLAY_MEDIA", "TORCH_ON", "TORCH_OFF",
         "MEDIA_PAUSE", "MEDIA_PLAY", "MEDIA_NEXT", "MEDIA_PREVIOUS", "BATTERY", "NONE"
     )
 
@@ -51,7 +51,7 @@ class DronnkBrain {
 
             Acciones permitidas:
             OPEN_APP, CALL_CONTACT, CALL_IN_APP, OPEN_CHAT, PREPARE_MESSAGE,
-            PLAY_YOUTUBE, SPOTIFY_SEARCH, TORCH_ON, TORCH_OFF,
+            PLAY_MEDIA, TORCH_ON, TORCH_OFF,
             MEDIA_PAUSE, MEDIA_PLAY, MEDIA_NEXT, MEDIA_PREVIOUS, BATTERY, NONE.
 
             Reglas:
@@ -60,13 +60,13 @@ class DronnkBrain {
             - CALL_IN_APP: app = aplicación solicitada; target = persona.
             - OPEN_CHAT: app = aplicación; target = persona/chat.
             - PREPARE_MESSAGE: app = aplicación; target = destinatario; message = texto exacto que quiere comunicar.
-            - Si no se menciona una app para un mensaje, app="default".
-            - PLAY_YOUTUBE y SPOTIFY_SEARCH: value = búsqueda.
+            - PLAY_MEDIA: app = aplicación donde se debe reproducir; value = canción, artista, podcast, video o búsqueda. Nunca cambies la app pedida por otra. Si el usuario dice TushNH, app debe ser exactamente TushNH. Si dice YouTube, usa YouTube. Si dice Spotify, usa Spotify.
+            - Si el usuario pide reproducir algo y no menciona app, app="default".
             - NONE: conversación o pregunta sin acción del teléfono.
             - “escríbele”, “dile”, “mándale”, “avísale”, “respóndele” significan PREPARE_MESSAGE.
             - IG/insta significa Instagram. FB puede ser Facebook/Messenger según contexto.
             - Conserva nombres propios como fueron reconocidos; Android hará coincidencia fonética con contactos.
-            - Usa contexto reciente para “a ella”, “hazlo”, “la misma”, “respóndele”, etc.
+            - Usa contexto reciente para “a ella”, “hazlo”, “la misma”, “respóndele”, “ponla ahí”, etc.
             - No inventes acciones fuera de la lista y no afirmes que ya se ejecutaron.
             - reply debe ser breve.
         """.trimIndent()
